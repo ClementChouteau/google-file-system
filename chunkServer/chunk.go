@@ -88,7 +88,6 @@ func (chunk *Chunk) WriteInMemoryChunk(blocksCache *BlocksCache, offset uint32, 
 
 	for blockId := startBlockId; blockId <= endBlockId; blockId++ {
 		var block *ChunkBlock
-		// TODO operationId
 		block, err = blocksCache.Get(chunk, blockId, WriteBlock)
 		if err != nil {
 			return

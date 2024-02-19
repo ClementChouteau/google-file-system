@@ -89,8 +89,8 @@ type RecordAppendArgs struct {
 	DataId uuid.UUID
 }
 type RecordAppendReply struct {
-	// TODO pos
-	Done bool // Not enough space in the current chunk
+	Done bool   // Not enough space in the current chunk
+	Pos  uint32 // Position of the beginning of the appended data
 }
 
 type ChunkReplication struct {

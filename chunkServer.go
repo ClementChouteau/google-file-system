@@ -4,216 +4,29 @@ import (
 	"Google_File_System/chunkServer"
 	"Google_File_System/utils/common"
 	"Google_File_System/utils/rpcdefs"
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"github.com/google/uuid"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"io"
 	"net"
 	"net/rpc"
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-const (
-	Write = iota
-	Done  // The corresponding operation is persisted
-)
-
-type OplogEntryHeader struct {
-	OperationType uint8
-	OperationId   uint32
-	// TODO checksum of the entry
-}
-
-type OplogEntry struct {
-	OplogEntryHeader
-	Content Serializable
-}
-
-type Serializable interface {
-	Serialize(io.Writer) error
-}
-
-type WithType interface {
-	Type() uint8
-}
-
-type SerializableOperation interface {
-	Serializable
-	WithType
-}
-
-type WriteOperation struct {
-	ChunkId   common.ChunkId
-	Offset    uint32
-	TmpFileId uuid.UUID
-	Checksums []uint32
-}
-
-func (operation WriteOperation) Serialize(writer io.Writer) (err error) {
-	err = binary.Write(writer, binary.BigEndian, operation.ChunkId)
-	if err != nil {
-		return
-	}
-
-	err = binary.Write(writer, binary.BigEndian, operation.Offset)
-	if err != nil {
-		return
-	}
-
-	err = binary.Write(writer, binary.BigEndian, operation.TmpFileId)
-	if err != nil {
-		return
-	}
-
-	// Serialize the variable-sized field (checksums) separately
-	err = binary.Write(writer, binary.BigEndian, uint32(len(operation.Checksums)))
-	if err != nil {
-		return
-	}
-
-	for _, checksum := range operation.Checksums {
-		err = binary.Write(writer, binary.BigEndian, checksum)
-		if err != nil {
-			return
-		}
-	}
-
-	return
-}
-
-func (operation WriteOperation) Type() uint8 {
-	return Write
-}
-
-type DoneOperation struct {
-	TargetOperationId uint32
-}
-
-func (operation DoneOperation) Serialize(writer io.Writer) (err error) {
-	err = binary.Write(writer, binary.BigEndian, operation.TargetOperationId)
-	return
-}
-
-func (operation DoneOperation) Type() uint8 {
-	return Done
-}
-
-func (header OplogEntryHeader) Serialize(writer io.Writer) (err error) {
-	err = binary.Write(writer, binary.BigEndian, header)
-	return
-}
-
-func (entry OplogEntry) Serialize(writer io.Writer) (err error) {
-	err = entry.OplogEntryHeader.Serialize(writer)
-	if err != nil {
-		return
-	}
-
-	err = entry.Content.Serialize(writer)
-	if err != nil {
-		return
-	}
-
-	return
-}
-
-func Deserialize(reader io.Reader) (entry OplogEntry, err error) {
-	err = binary.Read(reader, binary.BigEndian, &entry.OplogEntryHeader)
-	if err != nil {
-		return
-	}
-
-	switch entry.OperationType {
-	case Write:
-		var operation WriteOperation
-
-		err = binary.Read(reader, binary.BigEndian, &operation.ChunkId)
-		if err != nil {
-			return
-		}
-
-		err = binary.Read(reader, binary.BigEndian, &operation.Offset)
-		if err != nil {
-			return
-		}
-
-		err = binary.Read(reader, binary.BigEndian, &operation.TmpFileId)
-		if err != nil {
-			return
-		}
-
-		// Serialize the variable-sized field (checksums) separately
-		var length uint32
-		err = binary.Read(reader, binary.BigEndian, &length)
-		if err != nil {
-			return
-		}
-
-		operation.Checksums = make([]uint32, 0, length)
-		for i := 0; i < int(length); i++ {
-			var checksum uint32
-			err = binary.Read(reader, binary.BigEndian, &checksum)
-			if err != nil {
-				return
-			}
-			operation.Checksums = append(operation.Checksums, checksum)
-		}
-
-		entry.Content = &operation
-		break
-
-	case Done:
-		var operation DoneOperation
-		err = binary.Read(reader, binary.BigEndian, &operation)
-		entry.Content = &operation
-		break
-	}
-
-	return
-}
-
-type Oplog struct {
-	nextAvailableOperationId atomic.Uint32
-	added                    chan OplogEntry
-	synced                   chan OplogEntry
-}
-
-func (oplog *Oplog) NewOperationId() uint32 {
-	return oplog.nextAvailableOperationId.Add(1) - 1
-}
-
-func (oplog *Oplog) Add(operation SerializableOperation) {
-	oplog.added <- OplogEntry{
-		OplogEntryHeader: OplogEntryHeader{
-			OperationType: operation.Type(),
-			OperationId:   oplog.NewOperationId(),
-			// TODO checksum
-		},
-		Content: operation,
-	}
-}
-
-// TODO functions necessary ?
-// TODO read all oplog lines (keep valid lines) + wait all operation durable?
-// TODO truncate oplog to last valid line + sync
-// TODO server start
-
 type ChunkService struct {
-	settings    chunkServer.Settings
-	id          common.ChunkServerId
-	oplog       Oplog
-	blocksCache *chunkServer.BlocksCache
-	chunks      sync.Map // common.ChunkId => *chunkServer.Chunk
-	servers     sync.Map // common.ChunkServerId => common.ChunkServer
+	settings      chunkServer.Settings
+	id            common.ChunkServerId
+	blocksCache   *chunkServer.BlocksCache
+	chunks        sync.Map // common.ChunkId => *chunkServer.Chunk
+	servers       sync.Map // common.ChunkServerId => common.ChunkServer
+	temporaryData *lru.Cache[uuid.UUID, []byte]
 }
 
 func (chunkService *ChunkService) ensureFolders() (err error) {
@@ -223,11 +36,6 @@ func (chunkService *ChunkService) ensureFolders() (err error) {
 	}
 
 	err = os.Mkdir(chunkService.settings.GetChunksFolder(), 0755)
-	if err != nil && !os.IsExist(err) {
-		return err
-	}
-
-	err = os.Mkdir(chunkService.settings.GetTemporaryFilesFolder(), 0755)
 	if err != nil && !os.IsExist(err) {
 		return err
 	}
@@ -326,8 +134,6 @@ func (chunkService *ChunkService) ensureServerId() common.ChunkServerId {
 }
 
 func (chunkService *ChunkService) sendHeartbeat() {
-	// TODO do not send all chunks every time
-	// TODO just send diff from initial chunks
 	chunks := make([]common.ChunkId, 0)
 	chunkService.chunks.Range(func(key any, value any) bool {
 		chunks = append(chunks, value.(*chunkServer.Chunk).Id)
@@ -351,157 +157,6 @@ func (chunkService *ChunkService) sendHeartbeat() {
 	err = client.Call("MasterService.HeartbeatRPC", request, &reply)
 	if err != nil {
 		log.Error().Msgf("calling HeartbeatRPC: %v", err)
-	}
-}
-
-func (chunkService *ChunkService) oplogWriter(wg *sync.WaitGroup) (err error) {
-	defer wg.Done()
-	defer log.Info().Msg("stopping oplog writer")
-
-	var file *os.File
-	file, err = os.OpenFile(chunkService.settings.GetOplogPath(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	buffer := make([]OplogEntry, 0, len(chunkService.oplog.added))
-
-	for {
-		// Wait to have at least 1 operation to write
-		operation, ok := <-chunkService.oplog.added
-		if !ok {
-			return
-		}
-		buffer = append(buffer, operation)
-
-		// Get remaining operations immediately available
-		for {
-			select {
-			case operation, ok := <-chunkService.oplog.added:
-				if !ok {
-					return
-				}
-				buffer = append(buffer, operation)
-			default:
-				// Write and sync these operations
-				for _, operation := range buffer {
-					buffer := new(bytes.Buffer)
-					err := operation.Serialize(buffer)
-					if err != nil {
-						log.Error().Err(err).Msg("when serializing oplog operation")
-					}
-					_, err = file.Write(buffer.Bytes())
-					if err != nil {
-						log.Error().Err(err).Msg("when writing oplog operation to disk")
-					}
-				}
-				err := file.Sync()
-				if err != nil {
-					log.Error().Err(err).Msg("when syncing oplog")
-				}
-
-				// Ask the background thread to apply these operations
-				for _, operation := range buffer {
-					chunkService.oplog.synced <- operation
-				}
-				buffer = buffer[:0]
-				break
-			}
-		}
-	}
-}
-
-func (chunkService *ChunkService) oplogReader() (err error) {
-	defer log.Info().Msg("read oplog from disk")
-
-	var file *os.File
-	file, err = os.OpenFile(chunkService.settings.GetOplogPath(), os.O_RDONLY|os.O_CREATE, 0644)
-
-	n := 0
-	for {
-		var entry OplogEntry
-		entry, err = Deserialize(file)
-		if err == io.EOF {
-			err = nil
-			break
-		}
-		if err != nil {
-			return
-		}
-
-		n++
-		chunkService.oplog.synced <- entry
-	}
-
-	log.Debug().Msgf("read %d entries from disk", n)
-
-	return
-}
-
-func (chunkService *ChunkService) applyWrite(operation *WriteOperation) error {
-	chunk, err := chunkService.ensureChunk(operation.ChunkId, false)
-	if err != nil {
-		return err
-	}
-
-	chunk.FileMutex.Lock()
-	defer chunk.FileMutex.Unlock()
-
-	tmpPath := chunkService.settings.GetTemporaryFilePath(operation.TmpFileId.String())
-	tmpFile, err := os.Open(tmpPath)
-	if err != nil {
-		return err
-	}
-	defer tmpFile.Close()
-
-	chunkFile, err := os.OpenFile(chunkService.settings.GetChunkPath(operation.ChunkId), os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer chunkFile.Close()
-
-	err = chunkServer.WriteChunkBlock(tmpFile, chunkFile, operation.Offset, operation.Checksums)
-	if err != nil {
-		return err
-	}
-
-	err = chunkFile.Sync()
-	if err != nil {
-		return err
-	}
-
-	// TODO logic to remove dirty flag
-
-	tmpFile.Close()
-	return os.Remove(tmpPath)
-}
-
-func (chunkService *ChunkService) apply(entry OplogEntry) {
-	switch entry.OperationType {
-	case Write:
-		operation := entry.Content.(*WriteOperation)
-		err := chunkService.applyWrite(operation)
-		if err != nil {
-			log.Error().Err(err).Msg("applyWrite")
-		}
-		return
-
-	case Done:
-		return
-	}
-}
-
-func (chunkService *ChunkService) backgroundWriter() (err error) {
-	for {
-		select {
-		case entry, ok := <-chunkService.oplog.synced:
-			if !ok {
-				return
-			}
-
-			chunkService.apply(entry)
-		}
 	}
 }
 
@@ -539,43 +194,6 @@ func (chunkService *ChunkService) startServer(wg *sync.WaitGroup) error {
 	}
 }
 
-func (chunkService *ChunkService) applyExistingOplog() (err error) {
-	errorCh := make(chan error, 2)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		err := chunkService.oplogReader()
-		if err != nil {
-			log.Error().Err(err).Msg("calling oplogReader")
-		}
-		errorCh <- err
-		close(chunkService.oplog.synced)
-	}()
-
-	go func() {
-		defer wg.Done()
-		err := chunkService.backgroundWriter()
-		if err != nil {
-			log.Error().Err(err).Msg("calling backgroundWriter")
-		}
-		errorCh <- err
-	}()
-
-	wg.Wait()
-	close(errorCh)
-
-	chunkService.oplog.synced = make(chan OplogEntry, 1024)
-
-	err, _ = <-errorCh
-	if err != nil {
-		return errors.New("could not apply already existing oplog")
-	}
-	return
-}
-
 func (chunkService *ChunkService) start() {
 	if err := chunkService.ensureFolders(); err != nil {
 		log.Fatal().Err(err).Msg("calling ensureFolders")
@@ -591,53 +209,21 @@ func (chunkService *ChunkService) start() {
 	log.Logger = log.Logger.With().Uint32("chunkServer", serverId).Logger()
 	log.Info().Msg("chunk server ready")
 
-	err = chunkService.applyExistingOplog()
-	if err != nil {
-		log.Fatal().Err(err).Msg("calling applyExistingOplog")
-	}
-
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(2)
 	go chunkService.heartbeatTicker(&wg)
-	go func() {
-		defer wg.Done()
-		chunkService.backgroundWriter()
-	}()
-	go chunkService.oplogWriter(&wg)
 	go chunkService.startServer(&wg)
 
 	wg.Wait()
 }
 
-func (chunkService *ChunkService) writeTemporary(name string, data []byte) (err error) {
-	for {
-		file, err := os.OpenFile(chunkService.settings.GetTemporaryFilePath(name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		if err == nil {
-			_, err = file.Write(data)
-			if err != nil {
-				return err
-			}
-
-			err := file.Sync()
-			if err != nil {
-				return err
-			}
-
-			return nil
-		}
-
-		return err
-	}
+func (chunkService *ChunkService) writeTemporary(id uuid.UUID, data []byte) {
+	chunkService.temporaryData.Add(id, data)
 }
 
-func (chunkService *ChunkService) readTemporary(name string) (data []byte, err error) {
-	data, err = os.ReadFile(chunkService.settings.GetTemporaryFilePath(name))
-	return
+func (chunkService *ChunkService) readTemporary(id uuid.UUID) (data []byte, exists bool) {
+	value, exists := chunkService.temporaryData.Get(id)
+	return value, exists
 }
 
 // Ensure that the chunk exists, writes it
@@ -709,50 +295,33 @@ func (chunkService *ChunkService) RevokeLeaseRPC(request rpcdefs.RevokeLeaseArgs
 	return nil
 }
 
-func (chunkService *ChunkService) PushDataRPC(request rpcdefs.PushDataArgs, _ *rpcdefs.PushDataReply) error {
+func (chunkService *ChunkService) PushDataRPC(request rpcdefs.PushDataArgs, _ *rpcdefs.PushDataReply) (err error) {
 	if len(request.Data) == 0 {
 		return errors.New("empty Data")
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Write data on disk
-	var writeErr error
-	go func() {
-		defer wg.Done()
-		writeErr = chunkService.writeTemporary(request.Id.String(), request.Data)
-	}()
+	// Write data in memory cache
+	chunkService.writeTemporary(request.Id, request.Data)
 
 	// Push to next server if we are not the last one
-	var forwardErr error
 	var forwardReply rpcdefs.PushDataReply
-	go func() {
-		defer wg.Done()
-		for i, server := range request.Servers {
-			if server.Id != chunkService.id {
-				continue
-			}
-
-			if i != len(request.Servers)-1 {
-				forwardErr = request.Servers[i+1].Endpoint.Call("ChunkService.PushDataRPC", request, &forwardReply)
-			}
-			break
+	for i, server := range request.Servers {
+		if server.Id != chunkService.id {
+			continue
 		}
-	}()
 
-	wg.Wait()
-
-	if writeErr != nil {
-		return writeErr
-	}
-	if forwardErr != nil {
-		return forwardErr
+		if i != len(request.Servers)-1 {
+			err = request.Servers[i+1].Endpoint.Call("ChunkService.PushDataRPC", request, &forwardReply)
+			if err != nil {
+				return
+			}
+		}
+		break
 	}
 
 	log.Debug().Msgf("wrote temporary file of length %d with id %s", len(request.Data), request.Id.String())
 
-	return nil
+	return
 }
 
 func (chunkService *ChunkService) ApplyWriteRPC(request rpcdefs.ApplyWriteArgs, _ *rpcdefs.ApplyWriteReply) error {
@@ -762,23 +331,16 @@ func (chunkService *ChunkService) ApplyWriteRPC(request rpcdefs.ApplyWriteArgs, 
 		return err
 	}
 
-	data, err := chunkService.readTemporary(request.DataId.String())
-	if err != nil {
-		return err
+	data, exists := chunkService.readTemporary(request.DataId)
+	if !exists {
+		return errors.New("temporary data not found")
 	}
-	var checksums []uint32
-	checksums, err = chunk.WriteInMemoryChunk(chunkService.blocksCache, request.Offset, data)
+	_, err = chunk.WriteInMemoryChunk(chunkService.blocksCache, request.Offset, data)
 	if err != nil {
 		return err
 	}
 
 	log.Debug().Msgf("wrote %d bytes to chunk %d at offset %d", len(data), request.Id, request.Offset)
-	chunkService.oplog.Add(&WriteOperation{
-		ChunkId:   request.Id,
-		Offset:    request.Offset,
-		TmpFileId: request.DataId,
-		Checksums: checksums,
-	})
 
 	return nil
 }
@@ -830,16 +392,15 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 		return &rpcdefs.NoLeaseError{Message: fmt.Sprintf("no lease for chunk with id %d", request.Id)}
 	}
 
-	data, err := chunkService.readTemporary(request.DataId.String())
-	if err != nil {
-		return err
+	data, exists := chunkService.readTemporary(request.DataId)
+	if !exists {
+		return errors.New("temporary data not found")
 	}
 
-	padding, offset, checksums, err := chunk.AppendInMemoryChunk(chunkService.blocksCache, data)
+	padding, offset, _, err := chunk.AppendInMemoryChunk(chunkService.blocksCache, data)
 	if err != nil {
 		return err
 	}
-	// TODO //////////////////////////////////////////////////////////////////
 
 	for _, server := range chunk.Replication {
 		if server.Id == chunkService.id {
@@ -860,28 +421,20 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 	}
 
 	log.Debug().Msgf("record append of %d bytes done for chunk %d at offset %d", len(data), request.Id, offset)
-	chunkService.oplog.Add(&WriteOperation{
-		ChunkId:   request.Id,
-		Offset:    offset,
-		TmpFileId: request.DataId,
-		Checksums: checksums,
-	})
 
 	*reply = rpcdefs.RecordAppendReply{
 		Done: !padding,
+		Pos:  offset,
 	}
 
 	return nil
 }
 
-func NewChunkService(settings chunkServer.Settings) (chunkService *ChunkService) {
+func NewChunkService(settings chunkServer.Settings) (chunkService *ChunkService, err error) {
 	chunkService = new(ChunkService)
-	chunkService.oplog = Oplog{
-		added:  make(chan OplogEntry, 1024),
-		synced: make(chan OplogEntry, 1024),
-	}
 	chunkService.settings = settings
 	chunkService.blocksCache = chunkServer.NewBlocksCache(&chunkService.settings)
+	chunkService.temporaryData, err = lru.New[uuid.UUID, []byte](4096)
 
 	return
 }
@@ -925,6 +478,9 @@ func main() {
 		Folder: *folder,
 	}
 
-	chunkService := NewChunkService(settings)
+	chunkService, err := NewChunkService(settings)
+	if err != nil {
+		log.Fatal().Err(err).Send()
+	}
 	chunkService.start()
 }

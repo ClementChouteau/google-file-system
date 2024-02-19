@@ -16,14 +16,6 @@ func (settings *Settings) GetChunksFolder() string {
 	return filepath.Join(settings.Folder, "chunks")
 }
 
-func (settings *Settings) GetTemporaryFilesFolder() string {
-	return filepath.Join(settings.Folder, "tmp")
-}
-
-func (settings *Settings) GetTemporaryFilePath(name string) string {
-	return filepath.Join(settings.GetTemporaryFilesFolder(), name)
-}
-
 func (settings *Settings) GetChunkPath(id common.ChunkId) string {
 	return filepath.Join(settings.GetChunksFolder(), strconv.Itoa(int(id)))
 }

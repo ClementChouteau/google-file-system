@@ -835,29 +835,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 		return err
 	}
 
-	// TODO extract in function //////////////////////////////////////////////
-	var padding bool
-	var offset uint32
-	var length uint32
-	chunk.Blocks.LengthLock.Lock()
-	if chunk.Blocks.Length+uint32(len(data)) < common.ChunkSize {
-		padding = false
-		offset = chunk.Blocks.Length
-		chunk.Blocks.Length += uint32(len(data))
-		length = chunk.Blocks.Length
-	} else {
-		padding = true
-		length = common.ChunkSize - chunk.Blocks.Length
-		chunk.Blocks.Length = common.ChunkSize // Padding
-	}
-	chunk.Blocks.LengthLock.Unlock()
-
-	if padding {
-		data = make([]byte, length)
-	}
-
-	var checksums []uint32
-	checksums, err = chunk.WriteInMemoryChunk(chunkService.blocksCache, offset, data)
+	padding, offset, checksums, err := chunk.AppendInMemoryChunk(chunkService.blocksCache, data)
 	if err != nil {
 		return err
 	}

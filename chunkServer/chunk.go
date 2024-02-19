@@ -116,3 +116,26 @@ func (chunk *Chunk) WriteInMemoryChunk(blocksCache *BlocksCache, offset uint32, 
 
 	return
 }
+
+func (chunk *Chunk) AppendInMemoryChunk(blocksCache *BlocksCache, data []byte) (padding bool, offset uint32, checksums []uint32, err error) {
+	var length uint32
+	chunk.Blocks.LengthLock.Lock()
+	if chunk.Blocks.Length+uint32(len(data)) < common.ChunkSize {
+		padding = false
+		offset = chunk.Blocks.Length
+		chunk.Blocks.Length += uint32(len(data))
+		length = chunk.Blocks.Length
+	} else {
+		padding = true
+		length = common.ChunkSize - chunk.Blocks.Length
+		chunk.Blocks.Length = common.ChunkSize // Padding
+	}
+	chunk.Blocks.LengthLock.Unlock()
+
+	if padding {
+		data = make([]byte, length)
+	}
+
+	checksums, err = chunk.WriteInMemoryChunk(blocksCache, offset, data)
+	return
+}

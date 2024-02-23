@@ -259,7 +259,7 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 
 		// Try to record append in this chunk
 		chunkRequest := rpcdefs.RecordAppendArgs{
-			Id:     common.ChunkId(masterRequest.Nr),
+			Id:     masterReply.Id,
 			DataId: dataRequest.Id,
 		}
 		chunkReply := rpcdefs.RecordAppendReply{}

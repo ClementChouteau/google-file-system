@@ -215,7 +215,7 @@ masterLoop:
 				if rpcdefs.IsNoLeaseError(err) {
 					continue masterLoop
 				} else {
-					return fmt.Errorf("write failed for chunk with id=%d" + strconv.Itoa(int(chunkRange.id)))
+					return fmt.Errorf("write failed for chunk with id=%d", int(chunkRange.id))
 				}
 			}
 		}

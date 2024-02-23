@@ -144,7 +144,7 @@ func (chunkService *ChunkService) sendHeartbeat() {
 
 	client, err := rpc.Dial("tcp", chunkService.settings.Master.Address())
 	if err != nil {
-		log.Error().Msgf("connecting to RPC server: %v", err)
+		log.Error().Err(err).Msgf("connecting to RPC server: %v", err)
 		return
 	}
 	defer client.Close()
@@ -156,7 +156,7 @@ func (chunkService *ChunkService) sendHeartbeat() {
 	var reply struct{}
 	err = client.Call("MasterService.HeartbeatRPC", request, &reply)
 	if err != nil {
-		log.Error().Msgf("calling HeartbeatRPC: %v", err)
+		log.Error().Err(err).Msgf("calling HeartbeatRPC: %v", err)
 	}
 }
 
@@ -243,6 +243,10 @@ func (chunkService *ChunkService) ensureChunk(id common.ChunkId, create bool) (c
 		newChunk.FileMutex.Lock()
 		defer newChunk.FileMutex.Unlock()
 		err = chunkServer.EnsureChunk(chunkService.settings.GetChunkPath(id))
+		if err != nil {
+			log.Error().Err(err).Msgf("could not create chunk %d", id)
+			return
+		}
 		log.Debug().Msgf("created chunk %d", id)
 	}
 	chunk = value.(*chunkServer.Chunk)
@@ -259,6 +263,7 @@ func (chunkService *ChunkService) ReadRPC(request rpcdefs.ReadArgs, reply *rpcde
 
 	data, err := value.(*chunkServer.Chunk).ReadInMemoryChunk(chunkService.blocksCache, request.Offset, request.Length)
 	if err != nil {
+		log.Error().Err(err).Msgf("error when reading to chunk with id %d", request.Id)
 		return err
 	}
 	reply.Data = data
@@ -337,6 +342,7 @@ func (chunkService *ChunkService) ApplyWriteRPC(request rpcdefs.ApplyWriteArgs, 
 	}
 	_, err = chunk.WriteInMemoryChunk(chunkService.blocksCache, request.Offset, data)
 	if err != nil {
+		log.Error().Err(err).Msgf("error when writing to chunk with id %d", request.Id)
 		return err
 	}
 
@@ -399,6 +405,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 
 	padding, offset, _, err := chunk.AppendInMemoryChunk(chunkService.blocksCache, data)
 	if err != nil {
+		log.Error().Err(err).Msgf("error when appending to chunk with id %d", request.Id)
 		return err
 	}
 

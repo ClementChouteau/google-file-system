@@ -2,24 +2,41 @@ package chunkServer
 
 import (
 	"Google_File_System/utils/common"
+	"errors"
+	"os"
 	"sync"
 	"time"
 )
 
-type Blocks struct {
-	deletionLock sync.RWMutex
-	blocks       sync.Map // common.ChunkId => *block.ChunkBlock
-	LengthLock   sync.Mutex
-	Length       uint32 // TODO double check length management
-}
-
 type Chunk struct {
 	Id          common.ChunkId
-	FileMutex   sync.RWMutex // Protect accesses to the underlying file
-	Blocks      Blocks
+	lock        sync.RWMutex
 	LeaseMutex  sync.RWMutex
 	lease       time.Time // Time point when we received the lease
 	Replication []common.ChunkServer
+}
+
+func (chunk *Chunk) Size(path string) (size uint32, err error) {
+	chunk.lock.RLock()
+	defer chunk.lock.RUnlock()
+	file, err := os.OpenFile(path, os.O_RDONLY, 0644)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	return ChunkSize(file)
+}
+
+func (chunk *Chunk) Ensure(path string) (err error) {
+	chunk.lock.Lock()
+	defer chunk.lock.Unlock()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return
 }
 
 func (chunk *Chunk) GiveLeaseNow(replication []common.ChunkServer) {
@@ -35,106 +52,79 @@ func (chunk *Chunk) RevokeLease() {
 	chunk.lease = time.Time{}
 }
 
-func (chunk *Chunk) ReadInMemoryChunk(blocksCache *BlocksCache, offset uint32, length uint32) (data []byte, err error) {
-	chunk.Blocks.deletionLock.RLock()
-	defer chunk.Blocks.deletionLock.RUnlock()
+func (chunk *Chunk) Read(path string, offset uint32, length uint32) (data []byte, err error) {
+	chunk.lock.RLock()
+	defer chunk.lock.RUnlock()
+	file, err := os.OpenFile(path, os.O_RDONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 
-	data = make([]byte, 0, length)
-	startBlockId := offset / BlockSize
-	endBlockId := (offset + length - 1) / BlockSize
-	for blockId := startBlockId; blockId <= endBlockId; blockId++ {
-		var block *ChunkBlock
-		block, err = blocksCache.Get(chunk, blockId, ReadBlock)
-		if err != nil {
-			return
-		}
-		defer blocksCache.Put(block)
-
-		var readStart int
-		if blockId == startBlockId {
-			readStart = int(offset % BlockSize)
-		}
-
-		readEnd := BlockSize
-		if blockId == endBlockId {
-			readEnd = int((offset + length) % BlockSize)
-		}
-
-		// Only padding
-		if readStart >= int(block.Length) {
-			data = append(data, make([]byte, readEnd-readStart)...)
-		} else {
-			validReadEnd := min(readEnd, readStart+int(block.Length))
-			data = append(data, block.Data[readStart:validReadEnd]...)
-
-			// Padding at the end
-			if readEnd != validReadEnd {
-				data = append(data, make([]byte, readEnd-validReadEnd)...)
-			}
-		}
+	chunkSize, err := ChunkSize(file)
+	if err != nil {
+		return nil, err
+	}
+	if offset+length > chunkSize {
+		return nil, errors.New("reading past the end of chunk")
 	}
 
+	start := offset / BlockSize
+	end := (offset + length - 1) / BlockSize
+
+	data, err = ReadChunkBlocks(file, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	return data[offset%BlockSize : min(offset%BlockSize+length, uint32(len(data)))], nil
+}
+
+func (chunk *Chunk) Write(path string, offset uint32, data []byte) (err error) {
+	chunk.lock.RLock()
+	defer chunk.lock.RUnlock()
+	file, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	err = WriteChunkBlocks(file, offset, data)
 	return
 }
 
-func (chunk *Chunk) WriteInMemoryChunk(blocksCache *BlocksCache, offset uint32, data []byte) (checksums []uint32, err error) {
-	chunk.Blocks.deletionLock.RLock()
-	defer chunk.Blocks.deletionLock.RUnlock()
+func (chunk *Chunk) Append(path string, data []byte) (padding bool, offset uint32, err error) {
+	chunk.lock.RLock()
+	defer chunk.lock.RUnlock()
+	var file *os.File
+	file, err = os.OpenFile(path, os.O_RDONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
 
-	startBlockId := offset / BlockSize
-	endBlockId := (offset + uint32(len(data)) - 1) / BlockSize
-
-	checksums = make([]uint32, 0, endBlockId-startBlockId+1)
-
-	for blockId := startBlockId; blockId <= endBlockId; blockId++ {
-		var block *ChunkBlock
-		block, err = blocksCache.Get(chunk, blockId, WriteBlock)
-		if err != nil {
-			return
-		}
-		defer blocksCache.Put(block)
-
-		var writeOffset uint32
-		if blockId == startBlockId {
-			writeOffset = offset % BlockSize
-		}
-
-		var writeStart uint32
-		if blockId != startBlockId {
-			writeStart = (blockId-startBlockId)*BlockSize - offset%BlockSize
-		}
-
-		writeEnd := min((blockId-startBlockId+1)*BlockSize-offset%BlockSize, uint32(len(data)))
-
-		err = block.Write(writeOffset, data[writeStart:writeEnd])
-		if err != nil {
-			return
-		}
-		checksums = append(checksums, block.Checksum)
+	var size uint32
+	size, err = ChunkSize(file)
+	if err != nil {
+		return
 	}
 
-	return
-}
-
-func (chunk *Chunk) AppendInMemoryChunk(blocksCache *BlocksCache, data []byte) (padding bool, offset uint32, checksums []uint32, err error) {
 	var length uint32
-	chunk.Blocks.LengthLock.Lock()
-	if chunk.Blocks.Length+uint32(len(data)) < common.ChunkSize {
+	if size+uint32(len(data)) < common.ChunkSize {
 		padding = false
-		offset = chunk.Blocks.Length
-		chunk.Blocks.Length += uint32(len(data))
-		length = chunk.Blocks.Length
+		offset = size
+		size += uint32(len(data))
+		length = size
 	} else {
 		padding = true
-		length = common.ChunkSize - chunk.Blocks.Length
-		chunk.Blocks.Length = common.ChunkSize // Padding
+		length = common.ChunkSize - size
+		size = common.ChunkSize // Padding
 	}
-	chunk.Blocks.LengthLock.Unlock()
 
 	if padding {
 		data = make([]byte, length)
 	}
 
-	checksums, err = chunk.WriteInMemoryChunk(blocksCache, offset, data)
+	err = chunk.Write(path, offset, data)
 	return
 }

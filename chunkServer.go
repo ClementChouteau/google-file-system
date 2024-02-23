@@ -23,7 +23,6 @@ import (
 type ChunkService struct {
 	settings      chunkServer.Settings
 	id            common.ChunkServerId
-	blocksCache   *chunkServer.BlocksCache
 	chunks        sync.Map // common.ChunkId => *chunkServer.Chunk
 	servers       sync.Map // common.ChunkServerId => common.ChunkServer
 	temporaryData *lru.Cache[uuid.UUID, []byte]
@@ -223,6 +222,7 @@ func (chunkService *ChunkService) writeTemporary(id uuid.UUID, data []byte) {
 
 func (chunkService *ChunkService) readTemporary(id uuid.UUID) (data []byte, exists bool) {
 	value, exists := chunkService.temporaryData.Get(id)
+	chunkService.temporaryData.Remove(id)
 	return value, exists
 }
 
@@ -239,17 +239,15 @@ func (chunkService *ChunkService) ensureChunk(id common.ChunkId, create bool) (c
 	}
 
 	// Ensure that the file exists
+	chunk = value.(*chunkServer.Chunk)
 	if !exists {
-		newChunk.FileMutex.Lock()
-		defer newChunk.FileMutex.Unlock()
-		err = chunkServer.EnsureChunk(chunkService.settings.GetChunkPath(id))
+		err = chunk.Ensure(chunkService.settings.GetChunkPath(id))
 		if err != nil {
 			log.Error().Err(err).Msgf("could not create chunk %d", id)
 			return
 		}
 		log.Debug().Msgf("created chunk %d", id)
 	}
-	chunk = value.(*chunkServer.Chunk)
 	return
 }
 
@@ -261,7 +259,7 @@ func (chunkService *ChunkService) ReadRPC(request rpcdefs.ReadArgs, reply *rpcde
 		return errors.New("no corresponding chunk")
 	}
 
-	data, err := value.(*chunkServer.Chunk).ReadInMemoryChunk(chunkService.blocksCache, request.Offset, request.Length)
+	data, err := value.(*chunkServer.Chunk).Read(chunkService.settings.GetChunkPath(request.Id), request.Offset, request.Length)
 	if err != nil {
 		log.Error().Err(err).Msgf("error when reading to chunk with id %d", request.Id)
 		return err
@@ -340,7 +338,7 @@ func (chunkService *ChunkService) ApplyWriteRPC(request rpcdefs.ApplyWriteArgs, 
 	if !exists {
 		return errors.New("temporary data not found")
 	}
-	_, err = chunk.WriteInMemoryChunk(chunkService.blocksCache, request.Offset, data)
+	err = chunk.Write(chunkService.settings.GetChunkPath(request.Id), request.Offset, data)
 	if err != nil {
 		log.Error().Err(err).Msgf("error when writing to chunk with id %d", request.Id)
 		return err
@@ -403,7 +401,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 		return errors.New("temporary data not found")
 	}
 
-	padding, offset, _, err := chunk.AppendInMemoryChunk(chunkService.blocksCache, data)
+	padding, offset, err := chunk.Append(chunkService.settings.GetChunkPath(request.Id), data)
 	if err != nil {
 		log.Error().Err(err).Msgf("error when appending to chunk with id %d", request.Id)
 		return err
@@ -440,7 +438,6 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 func NewChunkService(settings chunkServer.Settings) (chunkService *ChunkService, err error) {
 	chunkService = new(ChunkService)
 	chunkService.settings = settings
-	chunkService.blocksCache = chunkServer.NewBlocksCache(&chunkService.settings)
 	chunkService.temporaryData, err = lru.New[uuid.UUID, []byte](4096)
 
 	return

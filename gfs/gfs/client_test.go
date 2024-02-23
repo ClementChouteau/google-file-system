@@ -118,12 +118,12 @@ func TestWrite(t *testing.T) {
 	assert.NoError(t, client.Write("/write/test/file", 0, []byte("Nice")))
 	data, err := client.Read("/write/test/file", 0, uint64(len("Nice")))
 	assert.NoError(t, err)
-	assert.EqualValues(t, string(data), "Nice")
+	assert.EqualValues(t, "Nice", string(data))
 
 	assert.NoError(t, client.Write("/write/test/file", uint64(len("Nice")), []byte(" Job!")))
 	data, err = client.Read("/write/test/file", 0, uint64(len("Nice Job!")))
 	assert.NoError(t, err)
-	assert.EqualValues(t, string(data), "Nice Job!")
+	assert.EqualValues(t, "Nice Job!", string(data))
 }
 
 func TestRecordAppend(t *testing.T) {
@@ -140,5 +140,5 @@ func TestRecordAppend(t *testing.T) {
 
 	data, err := client.Read("/record/append/file", 0, uint64(len("Hello World!")))
 	assert.NoError(t, err)
-	assert.Equal(t, string(data), "Hello World!")
+	assert.Equal(t, "Hello World!", string(data))
 }

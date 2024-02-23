@@ -26,7 +26,8 @@ Based on the wording from the paper it appears so.
 
 We assume to be in a crash-stop model where crash of all 3 (minimum replication factor)
 servers holding a chunk is assumed to be impossible.
-This implies that we can assume that a chunk server will always survive to save user data.
+This implies that we can assume that after accepting an in memory write,
+a chunk server will always survive to save user data.
 
 > What about crash-recovery ?
 

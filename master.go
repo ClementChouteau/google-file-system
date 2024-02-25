@@ -171,12 +171,34 @@ type MasterService struct {
 }
 
 func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (servers []common.ChunkServerId) {
-	servers = make([]common.ChunkServerId, 0, n)
-	// TODO improve server selection: find least full servers (count of chunks ?)
+	type OccupiedServer = struct {
+		id        common.ChunkServerId
+		occupancy int
+	}
+
+	leastOccupiedServers := make([]OccupiedServer, 0, n) // No need to use a heap as n is small
+
 	masterService.chunkLocationData.chunkServers.Range(func(key any, value any) bool {
-		servers = arraySet.Insert(servers, value.(ChunkServerMetadata).Id)
-		return uint32(len(servers)) != n
+		server := value.(ChunkServerMetadata)
+		occupancy := len(server.Chunks) // TODO lock access
+
+		if len(leastOccupiedServers) < int(n) {
+			leastOccupiedServers = append(leastOccupiedServers, OccupiedServer{id: server.Id, occupancy: occupancy})
+		} else {
+			for i, occupiedServer := range leastOccupiedServers {
+				if occupancy < occupiedServer.occupancy {
+					leastOccupiedServers[i] = OccupiedServer{id: server.Id, occupancy: occupancy}
+				}
+			}
+		}
+		return true
 	})
+
+	servers = make([]common.ChunkServerId, len(leastOccupiedServers))
+	for i, server := range leastOccupiedServers {
+		servers[i] = server.id
+	}
+
 	return
 }
 

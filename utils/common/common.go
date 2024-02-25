@@ -54,13 +54,6 @@ type ChunkServer struct {
 	Endpoint Endpoint
 }
 
-type ChunkServerMetadata struct {
-	ChunkServer
-	LastHeartbeat time.Time
-	Chunks        []ChunkId
-	Heartbeat     *ResettableTimer
-}
-
 type ResettableTimer struct {
 	C     <-chan time.Time
 	timer *time.Timer

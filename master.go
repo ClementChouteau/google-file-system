@@ -43,7 +43,7 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 		}
 		primary := replication[0] // TODO improve primary selection, choose least leased server
 		chunkServerMetadata, exists := masterService.chunkLocationData.chunkServers.Load(primary)
-		chunkServer := chunkServerMetadata.(common.ChunkServerMetadata).ChunkServer
+		chunkServer := chunkServerMetadata.(ChunkServerMetadata).ChunkServer
 
 		// Add corresponding servers to the reply
 		replicas := replication[1:]
@@ -51,7 +51,7 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 		for _, chunkServerId := range replicas {
 			chunkServerMetadata, exists := masterService.chunkLocationData.chunkServers.Load(chunkServerId)
 			if exists {
-				servers = arraySet.Insert(servers, chunkServerMetadata.(common.ChunkServerMetadata).ChunkServer)
+				servers = arraySet.Insert(servers, chunkServerMetadata.(ChunkServerMetadata).ChunkServer)
 			}
 		}
 
@@ -143,9 +143,16 @@ type ChunkReplication struct {
 	mutex       sync.Mutex
 }
 
+type ChunkServerMetadata struct {
+	common.ChunkServer
+	LastHeartbeat time.Time
+	Chunks        []common.ChunkId
+	Heartbeat     *common.ResettableTimer
+}
+
 type ChunkLocationData struct {
 	chunkReplication ChunkReplication
-	chunkServers     sync.Map // common.ChunkServerId => common.ChunkServerMetadata
+	chunkServers     sync.Map // common.ChunkServerId => ChunkServerMetadata
 	// TODO lease map: ChunkId => ChunkServerId + expiration
 }
 
@@ -167,7 +174,7 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 	servers = make([]common.ChunkServerId, 0, n)
 	// TODO improve server selection: find least full servers (count of chunks ?)
 	masterService.chunkLocationData.chunkServers.Range(func(key any, value any) bool {
-		servers = arraySet.Insert(servers, value.(common.ChunkServerMetadata).Id)
+		servers = arraySet.Insert(servers, value.(ChunkServerMetadata).Id)
 		return uint32(len(servers)) != n
 	})
 	return
@@ -191,7 +198,7 @@ func (masterService *MasterService) expireChunks(chunkServerId common.ChunkServe
 func (masterService *MasterService) ensureChunkServer(endpoint common.Endpoint, chunkServerId common.ChunkServerId) bool {
 	chunkServers := &masterService.chunkLocationData.chunkServers
 
-	newChunkServer := common.ChunkServerMetadata{
+	newChunkServer := ChunkServerMetadata{
 		ChunkServer: common.ChunkServer{
 			Id:       chunkServerId,
 			Endpoint: endpoint,
@@ -205,7 +212,7 @@ func (masterService *MasterService) ensureChunkServer(endpoint common.Endpoint, 
 	chunkServer, exists := chunkServers.LoadOrStore(chunkServerId, newChunkServer)
 	var heartbeat *common.ResettableTimer
 	if exists {
-		heartbeat = chunkServer.(common.ChunkServerMetadata).Heartbeat
+		heartbeat = chunkServer.(ChunkServerMetadata).Heartbeat
 	} else {
 		// TODO no need to expire whatsoever when there is no chunks
 		heartbeat = newChunkServer.Heartbeat
@@ -217,7 +224,7 @@ func (masterService *MasterService) ensureChunkServer(endpoint common.Endpoint, 
 			chunkServers := &masterService.chunkLocationData.chunkServers
 			chunkServer, exists := chunkServers.Load(chunkServerId)
 			if exists {
-				expiredChunks := chunkServer.(common.ChunkServerMetadata).Chunks
+				expiredChunks := chunkServer.(ChunkServerMetadata).Chunks
 				log.Error().Msgf("heartbeat timer expired for chunk server with id=%d containing %d chunks", chunkServerId, len(expiredChunks))
 				masterService.expireChunks(chunkServerId, expiredChunks)
 			}
@@ -249,7 +256,7 @@ func (masterService *MasterService) HeartbeatRPC(request rpcdefs.HeartBeatArgs, 
 	if !exists {
 		return errors.New("unregistered chunk server with id=" + strconv.Itoa(int(chunkServerId)))
 	}
-	chunkServer := value.(common.ChunkServerMetadata)
+	chunkServer := value.(ChunkServerMetadata)
 
 	// TODO reset the timer
 	chunkServer.Heartbeat.Reset(10 * time.Second)
@@ -622,7 +629,7 @@ func (masterService *MasterService) RecordAppendChunksRPC(request rpcdefs.Record
 				for _, chunkServerId := range selectedServers {
 					chunkServerMetadata, exists := masterService.chunkLocationData.chunkServers.Load(chunkServerId)
 					if exists {
-						servers = arraySet.Insert(servers, chunkServerMetadata.(common.ChunkServerMetadata).ChunkServer)
+						servers = arraySet.Insert(servers, chunkServerMetadata.(ChunkServerMetadata).ChunkServer)
 					}
 				}
 
@@ -711,7 +718,7 @@ func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.Re
 				for _, chunkServerId := range selectedServers {
 					chunkServerMetadata, exists := masterService.chunkLocationData.chunkServers.Load(chunkServerId)
 					if exists {
-						servers = arraySet.Insert(servers, chunkServerMetadata.(common.ChunkServerMetadata).ChunkServer)
+						servers = arraySet.Insert(servers, chunkServerMetadata.(ChunkServerMetadata).ChunkServer)
 					}
 				}
 

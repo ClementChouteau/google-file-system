@@ -97,7 +97,7 @@ func (chunk *Chunk) Append(path string, data []byte) (padding bool, offset uint3
 	chunk.lock.RLock()
 	defer chunk.lock.RUnlock()
 	var file *os.File
-	file, err = os.OpenFile(path, os.O_RDONLY, 0644)
+	file, err = os.OpenFile(path, os.O_RDWR, 0644)
 	if err != nil {
 		return
 	}
@@ -125,6 +125,6 @@ func (chunk *Chunk) Append(path string, data []byte) (padding bool, offset uint3
 		data = make([]byte, length)
 	}
 
-	err = chunk.Write(path, offset, data)
+	err = WriteChunkBlocks(file, offset, data)
 	return
 }

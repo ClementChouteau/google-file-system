@@ -47,7 +47,7 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 
 		// Add corresponding servers to the reply
 		replicas := replication[1:]
-		servers := make([]common.ChunkServer, len(replicas))
+		servers := make([]common.ChunkServer, 0, len(replicas))
 		for _, chunkServerId := range replicas {
 			chunkServerMetadata, exists := masterService.chunkLocationData.chunkServers.Load(chunkServerId)
 			if exists {

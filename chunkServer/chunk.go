@@ -10,27 +10,13 @@ import (
 
 type Chunk struct {
 	Id          common.ChunkId
-	lock        sync.RWMutex
+	Lock        sync.RWMutex
 	LeaseMutex  sync.RWMutex
 	lease       time.Time // Time point when we received the lease
 	Replication []common.ChunkServer
 }
 
-func (chunk *Chunk) Size(path string) (size uint32, err error) {
-	chunk.lock.RLock()
-	defer chunk.lock.RUnlock()
-	file, err := os.OpenFile(path, os.O_RDONLY, 0644)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
-	return ChunkSize(file)
-}
-
 func (chunk *Chunk) Ensure(path string) (err error) {
-	chunk.lock.Lock()
-	defer chunk.lock.Unlock()
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err
@@ -53,8 +39,6 @@ func (chunk *Chunk) RevokeLease() {
 }
 
 func (chunk *Chunk) Read(path string, offset uint32, length uint32) (data []byte, err error) {
-	chunk.lock.RLock()
-	defer chunk.lock.RUnlock()
 	file, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, err
@@ -81,8 +65,6 @@ func (chunk *Chunk) Read(path string, offset uint32, length uint32) (data []byte
 }
 
 func (chunk *Chunk) Write(path string, offset uint32, data []byte) (err error) {
-	chunk.lock.RLock()
-	defer chunk.lock.RUnlock()
 	file, err := os.OpenFile(path, os.O_RDWR, 0644)
 	if err != nil {
 		return err
@@ -94,8 +76,6 @@ func (chunk *Chunk) Write(path string, offset uint32, data []byte) (err error) {
 }
 
 func (chunk *Chunk) Append(path string, data []byte) (padding bool, offset uint32, err error) {
-	chunk.lock.RLock()
-	defer chunk.lock.RUnlock()
 	var file *os.File
 	file, err = os.OpenFile(path, os.O_RDWR, 0644)
 	if err != nil {

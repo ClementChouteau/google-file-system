@@ -254,44 +254,6 @@ func (masterService *MasterService) HeartbeatRPC(request utils.HeartBeatArgs, _ 
 	return nil
 }
 
-func normalize(path string) (string, error) {
-	if len(path) == 0 {
-		return "", errors.New("empty path")
-	}
-	if !strings.HasPrefix(path, "/") {
-		return "", errors.New("not an absolute path")
-	}
-
-	var builder strings.Builder
-	builder.Grow(len(path))
-	// Remove duplicated consecutive '/'
-	prev := rune(0)
-	for _, l := range path {
-		if l != '/' || prev != '/' {
-			builder.WriteRune(l)
-		}
-		prev = l
-	}
-
-	// Remove trailing '/'
-	normalized, _ := strings.CutSuffix(builder.String(), "/")
-
-	if len(normalized) == 0 {
-		normalized += "/"
-	}
-
-	return normalized, nil
-}
-
-// Return the parent directory, example: "/a/b" => "/a'
-func parentPath(path string) string {
-	i := strings.LastIndex(path, "/")
-	if i <= 0 {
-		return "/"
-	}
-	return path[:i]
-}
-
 // lockAncestors check ancestors and read lock all items in the path excluding the last one
 // Then either returns an error or calls f(value) which can be either *Directory | *File
 func (masterService *MasterService) lockAncestors(path string, f func(value any)) error {

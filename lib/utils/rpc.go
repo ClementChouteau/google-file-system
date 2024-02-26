@@ -1,17 +1,16 @@
-package rpcdefs
+package utils
 
 import (
-	"Google_File_System/utils/common"
 	"errors"
 	"github.com/google/uuid"
 )
 
-type RegisterArgs = common.Endpoint
-type RegisterReply = common.ChunkServerId
+type RegisterArgs = Endpoint
+type RegisterReply = ChunkServerId
 
 type HeartBeatArgs struct {
-	Id     common.ChunkServerId
-	Chunks []common.ChunkId
+	Id     ChunkServerId
+	Chunks []ChunkId
 }
 type HeartBeatReply struct{}
 
@@ -43,7 +42,7 @@ type DeleteArgs struct {
 type DeleteReply struct{}
 
 type ReadArgs struct {
-	Id     common.ChunkId
+	Id     ChunkId
 	Offset uint32
 	Length uint32
 }
@@ -52,25 +51,25 @@ type ReadReply struct {
 }
 
 type GrantLeaseArgs struct {
-	ChunkId     common.ChunkId
-	Replication []common.ChunkServer // Non-primary servers replicating this chunk
+	ChunkId     ChunkId
+	Replication []ChunkServer // Non-primary servers replicating this chunk
 }
 type GrantLeaseReply struct{}
 
 type RevokeLeaseArgs struct {
-	ChunkId common.ChunkId
+	ChunkId ChunkId
 }
 type RevokeLeaseReply struct{}
 
 type ServersLocation struct {
-	Servers     []common.ChunkServer
+	Servers     []ChunkServer
 	Replication []ChunkReplication
 }
 
 type PushDataArgs struct {
 	Data    []byte
-	Id      uuid.UUID            // Identification to be able to refer to this data later
-	Servers []common.ChunkServer // Chain of servers (in the order of push)
+	Id      uuid.UUID     // Identification to be able to refer to this data later
+	Servers []ChunkServer // Chain of servers (in the order of push)
 }
 type PushDataReply struct{}
 
@@ -78,14 +77,14 @@ type ApplyWriteArgs = WriteArgs
 type ApplyWriteReply = WriteReply
 
 type WriteArgs struct {
-	Id     common.ChunkId
+	Id     ChunkId
 	DataId uuid.UUID
 	Offset uint32
 }
 type WriteReply struct{}
 
 type RecordAppendArgs struct {
-	Id     common.ChunkId
+	Id     ChunkId
 	DataId uuid.UUID
 }
 type RecordAppendReply struct {
@@ -94,8 +93,8 @@ type RecordAppendReply struct {
 }
 
 type ChunkReplication struct {
-	Id      common.ChunkId
-	Servers []common.ChunkServerId
+	Id      ChunkId
+	Servers []ChunkServerId
 }
 
 type ReadWriteChunks struct {
@@ -104,7 +103,7 @@ type ReadWriteChunks struct {
 	Length uint64
 }
 
-func (serversLocation *ServersLocation) FindServer(id common.ChunkServerId) *common.ChunkServer {
+func (serversLocation *ServersLocation) FindServer(id ChunkServerId) *ChunkServer {
 	for _, server := range serversLocation.Servers {
 		if server.Id == id {
 			return &server
@@ -113,7 +112,7 @@ func (serversLocation *ServersLocation) FindServer(id common.ChunkServerId) *com
 	return nil
 }
 
-func (serversLocation *ServersLocation) FindReplication(id common.ChunkId) *[]common.ChunkServerId {
+func (serversLocation *ServersLocation) FindReplication(id ChunkId) *[]ChunkServerId {
 	for _, replication := range serversLocation.Replication {
 		if replication.Id == id {
 			return &replication.Servers
@@ -123,8 +122,8 @@ func (serversLocation *ServersLocation) FindReplication(id common.ChunkId) *[]co
 }
 
 type ChunksAndServersLocation struct {
-	Chunks    []common.ChunkId // Chunks of the file in order
-	PrimaryId common.ChunkServerId
+	Chunks    []ChunkId // Chunks of the file in order
+	PrimaryId ChunkServerId
 	ServersLocation
 }
 
@@ -140,8 +139,8 @@ type RecordAppendChunksArgs struct {
 }
 type RecordAppendChunksReply struct {
 	Nr        int
-	Id        common.ChunkId
-	PrimaryId common.ChunkServerId
+	Id        ChunkId
+	PrimaryId ChunkServerId
 	ServersLocation
 }
 

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"Google_File_System/chunkServer"
-	"Google_File_System/utils/common"
+	"Google_File_System/lib/chunkServer"
+	"Google_File_System/lib/utils"
 	"flag"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -37,11 +37,11 @@ func main() {
 
 	// Start server
 	settings := chunkServer.Settings{
-		Endpoint: common.Endpoint{
+		Endpoint: utils.Endpoint{
 			Host: *host,
 			Port: *port,
 		},
-		Master: common.Endpoint{
+		Master: utils.Endpoint{
 			Host: *masterHost,
 			Port: *masterPort,
 		},

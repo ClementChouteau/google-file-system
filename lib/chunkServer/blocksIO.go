@@ -1,7 +1,7 @@
 package chunkServer
 
 import (
-	"Google_File_System/utils/common"
+	"Google_File_System/lib/utils"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -10,7 +10,7 @@ import (
 
 const BlockSize = 64 * 1024
 
-const chunkChecksumsSize = (common.ChunkSize / BlockSize) * 4
+const chunkChecksumsSize = (utils.ChunkSize / BlockSize) * 4
 
 const chunkMetadataSize = chunkChecksumsSize
 
@@ -69,7 +69,7 @@ func ReadChunkBlocks(file *os.File, start uint32, end uint32) (data []byte, err 
 
 	// Checksum data
 	for i, storedChecksum := range storedChecksums {
-		checksum, err := common.Checksum(data[i*BlockSize : min((i+1)*BlockSize, len(data))])
+		checksum, err := utils.Checksum(data[i*BlockSize : min((i+1)*BlockSize, len(data))])
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +99,7 @@ func WriteChunkBlocks(file *os.File, offset uint32, data []byte) (err error) {
 	// Compute new checksums
 	checksums := make([]uint32, end-start+1)
 	for i := start; i <= end; i++ {
-		checksums[i-start], err = common.Checksum(storedData[i*BlockSize : min((i+1)*BlockSize, uint32(len(storedData)))])
+		checksums[i-start], err = utils.Checksum(storedData[i*BlockSize : min((i+1)*BlockSize, uint32(len(storedData)))])
 		if err != nil {
 			return
 		}

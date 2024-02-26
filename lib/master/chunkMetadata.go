@@ -1,27 +1,25 @@
 package master
 
 import (
-	"Google_File_System/utils/arraySet"
-	"Google_File_System/utils/common"
-	"Google_File_System/utils/rpcdefs"
+	"Google_File_System/lib/utils"
 	"errors"
 	"sync"
 	"time"
 )
 
 type ChunkMetadataMaster struct {
-	Id                  common.ChunkId
+	Id                  utils.ChunkId
 	Initialized         bool // Uninitialized chunks can be parts of sparse files, they have no replication
 	ReplicationGoal     uint32
 	LeaseMutex          sync.Mutex
 	Lease               time.Time // Time point when sending the lease
-	LeasedChunkServerId common.ChunkServerId
+	LeasedChunkServerId utils.ChunkServerId
 }
 
 func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err error) {
 	chunk.LeaseMutex.Lock()
 	defer chunk.LeaseMutex.Unlock()
-	hasLease := !chunk.Lease.IsZero() && time.Now().Before(chunk.Lease.Add(common.LeaseDuration))
+	hasLease := !chunk.Lease.IsZero() && time.Now().Before(chunk.Lease.Add(utils.LeaseDuration))
 	if !hasLease {
 		// Choose one of the chunk servers as the primary
 		replication := masterService.ChunkLocationData.ChunkReplication.Replication[chunk.Id]
@@ -34,22 +32,22 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 		primaryChunkServer := primaryChunkServerMetadata.(*ChunkServerMetadata).ChunkServer
 
 		// Add corresponding servers to the reply
-		replicas := arraySet.Remove(replication, primaryServerId)
-		servers := make([]common.ChunkServer, 0, len(replicas))
+		replicas := utils.Remove(replication, primaryServerId)
+		servers := make([]utils.ChunkServer, 0, len(replicas))
 		for _, chunkServerId := range replicas {
 			chunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
 			if exists {
-				servers = arraySet.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
+				servers = utils.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
 			}
 		}
 
 		if exists {
 			// Grant lease to this new primary
-			request := rpcdefs.GrantLeaseArgs{
+			request := utils.GrantLeaseArgs{
 				ChunkId:     chunk.Id,
 				Replication: servers,
 			}
-			err = primaryChunkServer.Endpoint.Call("ChunkService.GrantLeaseRPC", request, &rpcdefs.GrantLeaseReply{})
+			err = primaryChunkServer.Endpoint.Call("ChunkService.GrantLeaseRPC", request, &utils.GrantLeaseReply{})
 			if err != nil {
 				return
 			}
@@ -63,7 +61,7 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 	return
 }
 
-func (chunk *ChunkMetadataMaster) ensureInitialized(masterService *MasterService) (servers []common.ChunkServerId) {
+func (chunk *ChunkMetadataMaster) ensureInitialized(masterService *MasterService) (servers []utils.ChunkServerId) {
 	if !chunk.Initialized {
 		// TODO lock initialization
 		chunk.Initialized = true

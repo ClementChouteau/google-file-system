@@ -1,7 +1,7 @@
 package chunkServer
 
 import (
-	"Google_File_System/utils/common"
+	"Google_File_System/lib/utils"
 	"errors"
 	"os"
 	"sync"
@@ -9,11 +9,11 @@ import (
 )
 
 type Chunk struct {
-	Id          common.ChunkId
+	Id          utils.ChunkId
 	Lock        sync.RWMutex
 	LeaseMutex  sync.RWMutex
 	lease       time.Time // Time point when we received the lease
-	Replication []common.ChunkServer
+	Replication []utils.ChunkServer
 }
 
 func (chunk *Chunk) Ensure(path string) (err error) {
@@ -25,13 +25,13 @@ func (chunk *Chunk) Ensure(path string) (err error) {
 	return
 }
 
-func (chunk *Chunk) GiveLeaseNow(replication []common.ChunkServer) {
+func (chunk *Chunk) GiveLeaseNow(replication []utils.ChunkServer) {
 	chunk.lease = time.Now()
 	chunk.Replication = replication
 }
 
 func (chunk *Chunk) HasLease() bool {
-	return !chunk.lease.IsZero() && time.Now().Before(chunk.lease.Add(common.LeaseDuration))
+	return !chunk.lease.IsZero() && time.Now().Before(chunk.lease.Add(utils.LeaseDuration))
 }
 
 func (chunk *Chunk) RevokeLease() {
@@ -90,15 +90,15 @@ func (chunk *Chunk) Append(path string, data []byte) (padding bool, offset uint3
 	}
 
 	var length uint32
-	if size+uint32(len(data)) < common.ChunkSize {
+	if size+uint32(len(data)) < utils.ChunkSize {
 		padding = false
 		offset = size
 		size += uint32(len(data))
 		length = size
 	} else {
 		padding = true
-		length = common.ChunkSize - size
-		size = common.ChunkSize // Padding
+		length = utils.ChunkSize - size
+		size = utils.ChunkSize // Padding
 	}
 
 	if padding {

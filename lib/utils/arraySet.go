@@ -1,4 +1,4 @@
-package arraySet
+package utils
 
 func Contains[T comparable](array []T, haystack T) bool {
 	for _, value := range array {

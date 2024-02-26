@@ -1,8 +1,8 @@
 package main
 
 import (
-	"Google_File_System/master"
-	"Google_File_System/utils/common"
+	"Google_File_System/lib/master"
+	"Google_File_System/lib/utils"
 	"flag"
 	"github.com/rs/zerolog/log"
 	"net"
@@ -19,20 +19,20 @@ var (
 
 func init() {
 	flag.Parse()
-	log.Logger = common.InitializeLogger(*logLevel)
+	log.Logger = utils.InitializeLogger(*logLevel)
 }
 
 func main() {
 	masterService := new(master.MasterService)
 	masterService.Settings = master.Settings{
-		Endpoint: common.Endpoint{
+		Endpoint: utils.Endpoint{
 			Host: *host,
 			Port: *port,
 		},
 		Folder: *folder,
 	}
 	masterService.DefaultReplicationGoal.Store(3)
-	masterService.ChunkLocationData.ChunkReplication.Replication = make(map[common.ChunkId][]common.ChunkServerId)
+	masterService.ChunkLocationData.ChunkReplication.Replication = make(map[utils.ChunkId][]utils.ChunkServerId)
 	root := &master.Directory{
 		Files: make([]string, 0),
 	}

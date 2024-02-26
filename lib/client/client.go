@@ -1,8 +1,7 @@
-package gfs
+package client
 
 import (
-	"Google_File_System/utils/common"
-	"Google_File_System/utils/rpcdefs"
+	"Google_File_System/lib/utils"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
@@ -18,7 +17,7 @@ type GFSClient struct {
 }
 
 func New(host string, port int) (*GFSClient, error) {
-	endpoint := common.Endpoint{Host: host, Port: port}
+	endpoint := utils.Endpoint{Host: host, Port: port}
 	client, err := rpc.Dial("tcp", endpoint.Address())
 	if err != nil {
 		return nil, err
@@ -35,7 +34,7 @@ func (gfsClient *GFSClient) Close() error {
 }
 
 func (gfsClient *GFSClient) Mkdir(path string) error {
-	request := rpcdefs.MkdirArgs{
+	request := utils.MkdirArgs{
 		Path: path,
 	}
 	var reply struct{}
@@ -43,7 +42,7 @@ func (gfsClient *GFSClient) Mkdir(path string) error {
 }
 
 func (gfsClient *GFSClient) Rmdir(path string) error {
-	request := rpcdefs.RmdirArgs{
+	request := utils.RmdirArgs{
 		Path: path,
 	}
 	var reply struct{}
@@ -51,16 +50,16 @@ func (gfsClient *GFSClient) Rmdir(path string) error {
 }
 
 func (gfsClient *GFSClient) Ls(path string) ([]string, error) {
-	request := rpcdefs.LsArgs{
+	request := utils.LsArgs{
 		Path: path,
 	}
-	var reply rpcdefs.LsReply
+	var reply utils.LsReply
 	err := gfsClient.client.Call("MasterService.LsRPC", request, &reply)
 	return reply.Paths, err
 }
 
 func (gfsClient *GFSClient) Create(path string) error {
-	request := rpcdefs.CreateArgs{
+	request := utils.CreateArgs{
 		Path: path,
 	}
 	var reply struct{}
@@ -68,7 +67,7 @@ func (gfsClient *GFSClient) Create(path string) error {
 }
 
 func (gfsClient *GFSClient) Delete(path string) error {
-	request := rpcdefs.DeleteArgs{
+	request := utils.DeleteArgs{
 		Path: path,
 	}
 	var reply struct{}
@@ -76,11 +75,11 @@ func (gfsClient *GFSClient) Delete(path string) error {
 }
 
 type ChunkRange struct {
-	id common.ChunkId
-	common.Range[uint32]
+	id utils.ChunkId
+	utils.Range[uint32]
 }
 
-func generateChunkRanges(offset uint64, length uint64, chunks []common.ChunkId) (chunkRanges []ChunkRange) {
+func generateChunkRanges(offset uint64, length uint64, chunks []utils.ChunkId) (chunkRanges []ChunkRange) {
 	chunkRanges = make([]ChunkRange, 0, len(chunks))
 
 	n := len(chunks)
@@ -88,21 +87,21 @@ func generateChunkRanges(offset uint64, length uint64, chunks []common.ChunkId) 
 		// Offset
 		chunkOffset := uint32(0)
 		if i == 0 {
-			chunkOffset = uint32(offset % common.ChunkSize)
+			chunkOffset = uint32(offset % utils.ChunkSize)
 		} else if i == n-1 {
-			chunkOffset = uint32((offset + length) % common.ChunkSize)
+			chunkOffset = uint32((offset + length) % utils.ChunkSize)
 		}
 		// Length
-		chunkLength := uint32(common.ChunkSize)
+		chunkLength := uint32(utils.ChunkSize)
 		if i == 0 {
-			chunkLength = uint32(min(uint64(common.ChunkSize-chunkOffset), length))
+			chunkLength = uint32(min(uint64(utils.ChunkSize-chunkOffset), length))
 		} else if i == n-1 {
-			chunkLength = uint32((offset + length) % common.ChunkSize)
+			chunkLength = uint32((offset + length) % utils.ChunkSize)
 		}
 
 		chunkRanges = append(chunkRanges, ChunkRange{
 			id: chunkId,
-			Range: common.Range[uint32]{
+			Range: utils.Range[uint32]{
 				Offset: chunkOffset,
 				Length: chunkLength,
 			},
@@ -114,12 +113,12 @@ func generateChunkRanges(offset uint64, length uint64, chunks []common.ChunkId) 
 
 func (gfsClient *GFSClient) Read(path string, offset uint64, length uint64) (data []byte, err error) {
 	// Retrieve chunks and servers location
-	masterRequest := rpcdefs.ReadChunksArgs{
+	masterRequest := utils.ReadChunksArgs{
 		Path:   path,
 		Offset: offset,
 		Length: length,
 	}
-	masterReply := rpcdefs.ReadChunksReply{}
+	masterReply := utils.ReadChunksReply{}
 	err = gfsClient.client.Call("MasterService.ReadChunksRPC", masterRequest, &masterReply)
 	if err != nil {
 		return
@@ -131,14 +130,14 @@ func (gfsClient *GFSClient) Read(path string, offset uint64, length uint64) (dat
 		if serverIds == nil {
 			return nil, errors.New("invalid response from master, missing replication info")
 		}
-		common.Shuffle(*serverIds)
+		utils.Shuffle(*serverIds)
 		for _, chunkServerId := range *serverIds {
-			chunkRequest := rpcdefs.ReadArgs{
+			chunkRequest := utils.ReadArgs{
 				Id:     chunkRange.id,
 				Offset: chunkRange.Offset,
 				Length: chunkRange.Length,
 			}
-			chunkReply := &rpcdefs.ReadReply{}
+			chunkReply := &utils.ReadReply{}
 			server := masterReply.FindServer(chunkServerId)
 			if server == nil {
 				return nil, errors.New("invalid response from master, missing server info")
@@ -164,12 +163,12 @@ func (gfsClient *GFSClient) Write(path string, offset uint64, data []byte) (err 
 masterLoop:
 	for {
 		// Retrieve chunks and servers location
-		masterRequest := rpcdefs.WriteChunksArgs{
+		masterRequest := utils.WriteChunksArgs{
 			Path:   path,
 			Offset: offset,
 			Length: uint64(len(data)),
 		}
-		masterReply := rpcdefs.WriteChunksReply{}
+		masterReply := utils.WriteChunksReply{}
 		err = gfsClient.client.Call("MasterService.WriteChunksRPC", masterRequest, &masterReply)
 		if err != nil {
 			return
@@ -184,17 +183,17 @@ masterLoop:
 
 			var writeStart uint32
 			if i != 0 {
-				writeStart = uint32(i*common.ChunkSize) - chunkRange.Offset%common.ChunkSize
+				writeStart = uint32(i*utils.ChunkSize) - chunkRange.Offset%utils.ChunkSize
 			}
-			writeEnd := min(uint32((i+1)*common.ChunkSize)-chunkRange.Offset%common.ChunkSize, uint32(len(data)))
+			writeEnd := min(uint32((i+1)*utils.ChunkSize)-chunkRange.Offset%utils.ChunkSize, uint32(len(data)))
 
 			// Push data to all servers
-			dataRequest := rpcdefs.PushDataArgs{
+			dataRequest := utils.PushDataArgs{
 				Data:    data[writeStart:writeEnd],
 				Id:      uuid.New(),
 				Servers: masterReply.Servers,
 			}
-			dataReply := &rpcdefs.PushDataReply{}
+			dataReply := &utils.PushDataReply{}
 			primaryServer := masterReply.FindServer(masterReply.PrimaryId) // TODO We should push to the closest server
 			if primaryServer == nil {
 				return errors.New("invalid response from master, missing server info")
@@ -202,17 +201,17 @@ masterLoop:
 			err = primaryServer.Endpoint.Call("ChunkService.PushDataRPC", dataRequest, dataReply)
 
 			// Commit on primary
-			chunkRequest := rpcdefs.WriteArgs{
+			chunkRequest := utils.WriteArgs{
 				Id:     chunkRange.id,
 				DataId: dataRequest.Id,
 				Offset: chunkRange.Offset,
 			}
-			chunkReply := &rpcdefs.WriteReply{}
+			chunkReply := &utils.WriteReply{}
 
 			err = primaryServer.Endpoint.Call("ChunkService.WriteRPC", chunkRequest, chunkReply)
 			if err != nil {
 				log.Println(err)
-				if rpcdefs.IsNoLeaseError(err) {
+				if utils.IsNoLeaseError(err) {
 					continue masterLoop
 				} else {
 					return fmt.Errorf("write failed for chunk with id=%d", int(chunkRange.id))
@@ -229,11 +228,11 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 	var nr int
 	for {
 		// Retrieve primary that holds last chunk location and ensure it has lease
-		masterRequest := rpcdefs.RecordAppendChunksArgs{
+		masterRequest := utils.RecordAppendChunksArgs{
 			Path: path,
 			Nr:   nr,
 		}
-		masterReply := rpcdefs.RecordAppendChunksReply{}
+		masterReply := utils.RecordAppendChunksReply{}
 		err = gfsClient.client.Call("MasterService.RecordAppendChunksRPC", masterRequest, &masterReply)
 		if err != nil {
 			return
@@ -245,12 +244,12 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 		}
 
 		// Push data to all servers
-		dataRequest := rpcdefs.PushDataArgs{
+		dataRequest := utils.PushDataArgs{
 			Data:    data,
 			Id:      uuid.New(),
 			Servers: masterReply.Servers,
 		}
-		dataReply := rpcdefs.PushDataReply{}
+		dataReply := utils.PushDataReply{}
 		primaryServer := masterReply.FindServer(masterReply.PrimaryId) // TODO We should push to the closest server
 		if primaryServer == nil {
 			return errors.New("invalid response from master, missing server info")
@@ -258,14 +257,14 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 		err = primaryServer.Endpoint.Call("ChunkService.PushDataRPC", dataRequest, &dataReply)
 
 		// Try to record append in this chunk
-		chunkRequest := rpcdefs.RecordAppendArgs{
+		chunkRequest := utils.RecordAppendArgs{
 			Id:     masterReply.Id,
 			DataId: dataRequest.Id,
 		}
-		chunkReply := rpcdefs.RecordAppendReply{}
+		chunkReply := utils.RecordAppendReply{}
 		err = primaryServer.Endpoint.Call("ChunkService.RecordAppendRPC", chunkRequest, &chunkReply)
 		if err != nil {
-			if rpcdefs.IsNoLeaseError(err) {
+			if utils.IsNoLeaseError(err) {
 				err = nil
 				continue
 			}

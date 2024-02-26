@@ -1,8 +1,7 @@
 package chunkServer
 
 import (
-	"Google_File_System/utils/common"
-	"Google_File_System/utils/rpcdefs"
+	"Google_File_System/lib/utils"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -19,13 +18,13 @@ import (
 
 type Operation struct {
 	chunk      *Chunk
-	request    rpcdefs.WriteArgs
+	request    utils.WriteArgs
 	completion chan error
 }
 
 type ChunkService struct {
 	settings        Settings
-	id              common.ChunkServerId
+	id              utils.ChunkServerId
 	chunkOperations chan Operation
 	chunks          sync.Map // common.ChunkId => *Chunk
 	servers         sync.Map // common.ChunkServerId => common.ChunkServer
@@ -60,17 +59,17 @@ func (chunkService *ChunkService) readChunkMetadataFromDisk() (count int, err er
 		}
 
 		chunkMetadata := &Chunk{
-			Id: common.ChunkId(id),
+			Id: utils.ChunkId(id),
 		}
-		chunkService.chunks.Store(common.ChunkId(id), chunkMetadata)
+		chunkService.chunks.Store(utils.ChunkId(id), chunkMetadata)
 		count++
 	}
 
 	return
 }
 
-func (chunkService *ChunkService) readServerIdFromDisk() (common.ChunkServerId, error) {
-	var id common.ChunkServerId
+func (chunkService *ChunkService) readServerIdFromDisk() (utils.ChunkServerId, error) {
+	var id utils.ChunkServerId
 
 	file, err := os.Open(chunkService.settings.GetServerIdPath())
 	if err != nil {
@@ -81,7 +80,7 @@ func (chunkService *ChunkService) readServerIdFromDisk() (common.ChunkServerId, 
 	return id, err
 }
 
-func (chunkService *ChunkService) writeServerIdToDisk(id common.ChunkServerId) (err error) {
+func (chunkService *ChunkService) writeServerIdToDisk(id utils.ChunkServerId) (err error) {
 	var file *os.File
 	file, err = os.Create(chunkService.settings.GetServerIdPath())
 	if err != nil {
@@ -97,7 +96,7 @@ func (chunkService *ChunkService) writeServerIdToDisk(id common.ChunkServerId) (
 	return
 }
 
-func (chunkService *ChunkService) askServerId() common.ChunkServerId {
+func (chunkService *ChunkService) askServerId() utils.ChunkServerId {
 	log.Debug().Msg("requesting chunk server id from master")
 
 	client, err := rpc.Dial("tcp", chunkService.settings.Master.Address())
@@ -106,7 +105,7 @@ func (chunkService *ChunkService) askServerId() common.ChunkServerId {
 	}
 	defer client.Close()
 
-	var reply common.ChunkServerId
+	var reply utils.ChunkServerId
 	err = client.Call("MasterService.RegisterRPC", chunkService.settings.Endpoint, &reply)
 	if err != nil {
 		log.Fatal().Err(err).Msg("calling RegisterRPC")
@@ -114,7 +113,7 @@ func (chunkService *ChunkService) askServerId() common.ChunkServerId {
 	return reply
 }
 
-func (chunkService *ChunkService) ensureServerId() common.ChunkServerId {
+func (chunkService *ChunkService) ensureServerId() utils.ChunkServerId {
 	id, err := chunkService.readServerIdFromDisk()
 
 	if err != nil {
@@ -137,7 +136,7 @@ func (chunkService *ChunkService) ensureServerId() common.ChunkServerId {
 }
 
 func (chunkService *ChunkService) sendHeartbeat() {
-	chunks := make([]common.ChunkId, 0)
+	chunks := make([]utils.ChunkId, 0)
 	chunkService.chunks.Range(func(key any, value any) bool {
 		chunks = append(chunks, value.(*Chunk).Id)
 		return true
@@ -152,7 +151,7 @@ func (chunkService *ChunkService) sendHeartbeat() {
 	}
 	defer client.Close()
 
-	request := rpcdefs.HeartBeatArgs{
+	request := utils.HeartBeatArgs{
 		Id:     chunkService.id,
 		Chunks: chunks,
 	}
@@ -211,7 +210,7 @@ nextOperation:
 				continue
 			}
 
-			writeReply := &rpcdefs.WriteReply{}
+			writeReply := &utils.WriteReply{}
 			err := server.Endpoint.Call("ChunkService.ApplyWriteRPC", operation.request, writeReply)
 			if err != nil {
 				operation.completion <- err
@@ -258,7 +257,7 @@ func (chunkService *ChunkService) readTemporary(id uuid.UUID) (data []byte, exis
 }
 
 // Ensure that the chunk exists, writes it
-func (chunkService *ChunkService) ensureChunk(id common.ChunkId, create bool) (chunk *Chunk, err error) {
+func (chunkService *ChunkService) ensureChunk(id utils.ChunkId, create bool) (chunk *Chunk, err error) {
 	newChunk := &Chunk{
 		Id: id,
 	}
@@ -284,7 +283,7 @@ func (chunkService *ChunkService) ensureChunk(id common.ChunkId, create bool) (c
 	return
 }
 
-func (chunkService *ChunkService) ReadRPC(request rpcdefs.ReadArgs, reply *rpcdefs.ReadReply) error {
+func (chunkService *ChunkService) ReadRPC(request utils.ReadArgs, reply *utils.ReadReply) error {
 	value, exists := chunkService.chunks.Load(request.Id)
 	if !exists {
 		return errors.New("no corresponding chunk")
@@ -303,7 +302,7 @@ func (chunkService *ChunkService) ReadRPC(request rpcdefs.ReadArgs, reply *rpcde
 	return nil
 }
 
-func (chunkService *ChunkService) GrantLeaseRPC(request rpcdefs.GrantLeaseArgs, _ *rpcdefs.GrantLeaseReply) error {
+func (chunkService *ChunkService) GrantLeaseRPC(request utils.GrantLeaseArgs, _ *utils.GrantLeaseReply) error {
 	log.Debug().Msgf("received lease for chunk %d", request.ChunkId)
 
 	chunk, err := chunkService.ensureChunk(request.ChunkId, true)
@@ -318,7 +317,7 @@ func (chunkService *ChunkService) GrantLeaseRPC(request rpcdefs.GrantLeaseArgs, 
 	return nil
 }
 
-func (chunkService *ChunkService) RevokeLeaseRPC(request rpcdefs.RevokeLeaseArgs, _ *rpcdefs.RevokeLeaseReply) error {
+func (chunkService *ChunkService) RevokeLeaseRPC(request utils.RevokeLeaseArgs, _ *utils.RevokeLeaseReply) error {
 	value, exists := chunkService.chunks.Load(request.ChunkId)
 	if !exists {
 		return errors.New("no corresponding chunk")
@@ -332,7 +331,7 @@ func (chunkService *ChunkService) RevokeLeaseRPC(request rpcdefs.RevokeLeaseArgs
 	return nil
 }
 
-func (chunkService *ChunkService) PushDataRPC(request rpcdefs.PushDataArgs, _ *rpcdefs.PushDataReply) (err error) {
+func (chunkService *ChunkService) PushDataRPC(request utils.PushDataArgs, _ *utils.PushDataReply) (err error) {
 	if len(request.Data) == 0 {
 		return errors.New("empty Data")
 	}
@@ -341,7 +340,7 @@ func (chunkService *ChunkService) PushDataRPC(request rpcdefs.PushDataArgs, _ *r
 	chunkService.writeTemporary(request.Id, request.Data)
 
 	// Push to next server if we are not the last one
-	var forwardReply rpcdefs.PushDataReply
+	var forwardReply utils.PushDataReply
 	for i, server := range request.Servers {
 		if server.Id != chunkService.id {
 			continue
@@ -362,7 +361,7 @@ func (chunkService *ChunkService) PushDataRPC(request rpcdefs.PushDataArgs, _ *r
 }
 
 // ApplyWriteRPC (replicas only)
-func (chunkService *ChunkService) ApplyWriteRPC(request rpcdefs.ApplyWriteArgs, _ *rpcdefs.ApplyWriteReply) error {
+func (chunkService *ChunkService) ApplyWriteRPC(request utils.ApplyWriteArgs, _ *utils.ApplyWriteReply) error {
 	chunk, err := chunkService.ensureChunk(request.Id, true)
 	if err != nil {
 		log.Error().Err(err).Msg("calling ensureChunk")
@@ -387,7 +386,7 @@ func (chunkService *ChunkService) ApplyWriteRPC(request rpcdefs.ApplyWriteArgs, 
 }
 
 // WriteRPC (primary only)
-func (chunkService *ChunkService) WriteRPC(request rpcdefs.WriteArgs, _ *rpcdefs.WriteReply) error {
+func (chunkService *ChunkService) WriteRPC(request utils.WriteArgs, _ *utils.WriteReply) error {
 	chunk, err := chunkService.ensureChunk(request.Id, false)
 	if err != nil {
 		log.Error().Err(err).Msg("calling ensureChunk")
@@ -399,10 +398,10 @@ func (chunkService *ChunkService) WriteRPC(request rpcdefs.WriteArgs, _ *rpcdefs
 	defer chunk.LeaseMutex.RUnlock()
 	if !chunk.HasLease() {
 		log.Debug().Msgf("no lease for writing to chunk %d", request.Id)
-		return &rpcdefs.NoLeaseError{Message: fmt.Sprintf("no lease for chunk with id %d", request.Id)}
+		return &utils.NoLeaseError{Message: fmt.Sprintf("no lease for chunk with id %d", request.Id)}
 	}
 
-	err = chunkService.ApplyWriteRPC(request, &rpcdefs.WriteReply{})
+	err = chunkService.ApplyWriteRPC(request, &utils.WriteReply{})
 	if err != nil {
 		return err
 	}
@@ -420,7 +419,7 @@ func (chunkService *ChunkService) WriteRPC(request rpcdefs.WriteArgs, _ *rpcdefs
 }
 
 // RecordAppendRPC (primary only)
-func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendArgs, reply *rpcdefs.RecordAppendReply) error {
+func (chunkService *ChunkService) RecordAppendRPC(request utils.RecordAppendArgs, reply *utils.RecordAppendReply) error {
 	chunk, err := chunkService.ensureChunk(request.Id, false) // Chunk is created when receiving lease
 	if err != nil {
 		log.Error().Err(err).Msg("calling ensureChunk")
@@ -431,7 +430,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 	defer chunk.LeaseMutex.RUnlock()
 	if !chunk.HasLease() {
 		log.Debug().Msgf("no lease for writing to chunk %d", request.Id)
-		return &rpcdefs.NoLeaseError{Message: fmt.Sprintf("no lease for chunk with id %d", request.Id)}
+		return &utils.NoLeaseError{Message: fmt.Sprintf("no lease for chunk with id %d", request.Id)}
 	}
 
 	data, exists := chunkService.readTemporary(request.DataId)
@@ -447,7 +446,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 		return err
 	}
 
-	writeRequest := rpcdefs.WriteArgs{
+	writeRequest := utils.WriteArgs{
 		Id:     request.Id,
 		DataId: request.DataId,
 		Offset: offset,
@@ -469,7 +468,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request rpcdefs.RecordAppendAr
 
 	log.Debug().Msgf("record append of %d bytes done for chunk %d at offset %d", len(data), request.Id, offset)
 
-	*reply = rpcdefs.RecordAppendReply{
+	*reply = utils.RecordAppendReply{
 		Done: !padding,
 		Pos:  offset,
 	}

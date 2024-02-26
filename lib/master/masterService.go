@@ -1,9 +1,7 @@
 package master
 
 import (
-	"Google_File_System/utils/arraySet"
-	"Google_File_System/utils/common"
-	"Google_File_System/utils/rpcdefs"
+	"Google_File_System/lib/utils"
 	"errors"
 	"github.com/rs/zerolog/log"
 	"math"
@@ -14,7 +12,7 @@ import (
 	"time"
 )
 
-func (masterService *MasterService) chooseLeastLeased(servers []common.ChunkServerId) (leastLeasedServer common.ChunkServerId) {
+func (masterService *MasterService) chooseLeastLeased(servers []utils.ChunkServerId) (leastLeasedServer utils.ChunkServerId) {
 	leastLeasedCount := uint64(math.MaxUint64)
 
 	for _, serverId := range servers {
@@ -46,7 +44,7 @@ type File struct {
 	chunks []*ChunkMetadataMaster // consecutive
 }
 
-func (file *File) appendUninitializedChunk(chunkId common.ChunkId) {
+func (file *File) appendUninitializedChunk(chunkId utils.ChunkId) {
 	uninitializedChunk := &ChunkMetadataMaster{
 		Id:              chunkId,
 		Initialized:     false,
@@ -78,15 +76,15 @@ func (file *File) iterate(masterService *MasterService, startChunkNr int, endChu
 }
 
 type ChunkReplication struct {
-	Replication map[common.ChunkId][]common.ChunkServerId // Replication is ~3, so a simple array should be good enough
+	Replication map[utils.ChunkId][]utils.ChunkServerId // Replication is ~3, so a simple array should be good enough
 	mutex       sync.Mutex
 }
 
 type ChunkServerMetadata struct {
-	common.ChunkServer
+	utils.ChunkServer
 	LastHeartbeat time.Time
-	Chunks        []common.ChunkId
-	Heartbeat     *common.ResettableTimer
+	Chunks        []utils.ChunkId
+	Heartbeat     *utils.ResettableTimer
 	leaseCount    atomic.Uint64
 }
 
@@ -105,9 +103,9 @@ type MasterService struct {
 	ChunkLocationData          ChunkLocationData
 }
 
-func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (servers []common.ChunkServerId) {
+func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (servers []utils.ChunkServerId) {
 	type OccupiedServer = struct {
-		id        common.ChunkServerId
+		id        utils.ChunkServerId
 		occupancy int
 	}
 
@@ -129,7 +127,7 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 		return true
 	})
 
-	servers = make([]common.ChunkServerId, len(leastOccupiedServers))
+	servers = make([]utils.ChunkServerId, len(leastOccupiedServers))
 	for i, server := range leastOccupiedServers {
 		servers[i] = server.id
 	}
@@ -137,11 +135,11 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 	return
 }
 
-func (masterService *MasterService) expireChunks(chunkServerId common.ChunkServerId, expiredChunks []common.ChunkId) {
+func (masterService *MasterService) expireChunks(chunkServerId utils.ChunkServerId, expiredChunks []utils.ChunkId) {
 	chunkReplication := &masterService.ChunkLocationData.ChunkReplication
 	chunkReplication.mutex.Lock()
 	for _, chunkId := range expiredChunks {
-		chunks := arraySet.Remove(chunkReplication.Replication[chunkId], chunkServerId)
+		chunks := utils.Remove(chunkReplication.Replication[chunkId], chunkServerId)
 		chunkReplication.Replication[chunkId] = chunks
 		// TODO if below replication goal
 		if len(chunks) == 0 {
@@ -152,22 +150,22 @@ func (masterService *MasterService) expireChunks(chunkServerId common.ChunkServe
 	chunkReplication.mutex.Unlock()
 }
 
-func (masterService *MasterService) ensureChunkServer(endpoint common.Endpoint, chunkServerId common.ChunkServerId) bool {
+func (masterService *MasterService) ensureChunkServer(endpoint utils.Endpoint, chunkServerId utils.ChunkServerId) bool {
 	chunkServers := &masterService.ChunkLocationData.chunkServers
 
 	newChunkServer := &ChunkServerMetadata{
-		ChunkServer: common.ChunkServer{
+		ChunkServer: utils.ChunkServer{
 			Id:       chunkServerId,
 			Endpoint: endpoint,
 		},
 		LastHeartbeat: time.Now(),
-		Chunks:        make([]common.ChunkId, 0),
-		Heartbeat:     common.NewResettableTimer(10 * time.Second),
+		Chunks:        make([]utils.ChunkId, 0),
+		Heartbeat:     utils.NewResettableTimer(10 * time.Second),
 	}
 
 	// TODO mutex heartbeats ?
 	chunkServer, exists := chunkServers.LoadOrStore(chunkServerId, newChunkServer)
-	var heartbeat *common.ResettableTimer
+	var heartbeat *utils.ResettableTimer
 	if exists {
 		heartbeat = chunkServer.(*ChunkServerMetadata).Heartbeat
 	} else {
@@ -191,7 +189,7 @@ func (masterService *MasterService) ensureChunkServer(endpoint common.Endpoint, 
 	return exists
 }
 
-func (masterService *MasterService) RegisterRPC(request rpcdefs.RegisterArgs, reply *rpcdefs.RegisterReply) error {
+func (masterService *MasterService) RegisterRPC(request utils.RegisterArgs, reply *utils.RegisterReply) error {
 	id := masterService.nextAvailableChunkServerId.Add(1) - 1
 	// TODO persist it + Sync, before replying
 	*reply = id
@@ -206,7 +204,7 @@ func (masterService *MasterService) RegisterRPC(request rpcdefs.RegisterArgs, re
 	return nil
 }
 
-func (masterService *MasterService) HeartbeatRPC(request rpcdefs.HeartBeatArgs, _ *rpcdefs.HeartBeatReply) error {
+func (masterService *MasterService) HeartbeatRPC(request utils.HeartBeatArgs, _ *utils.HeartBeatReply) error {
 	chunkServers := &masterService.ChunkLocationData.chunkServers
 	chunkServerId := request.Id
 	value, exists := chunkServers.Load(chunkServerId)
@@ -226,7 +224,7 @@ func (masterService *MasterService) HeartbeatRPC(request rpcdefs.HeartBeatArgs, 
 		previousTime = currentTime
 	}
 	chunkServer.LastHeartbeat = currentTime
-	added, removed := arraySet.Diff(chunkServer.Chunks, request.Chunks)
+	added, removed := utils.Diff(chunkServer.Chunks, request.Chunks)
 	chunkServer.Chunks = request.Chunks
 	chunkServers.Store(chunkServerId, chunkServer)
 
@@ -235,12 +233,12 @@ func (masterService *MasterService) HeartbeatRPC(request rpcdefs.HeartBeatArgs, 
 	chunkReplication := &masterService.ChunkLocationData.ChunkReplication
 	for _, chunkId := range added {
 		chunkReplication.mutex.Lock()
-		chunkReplication.Replication[chunkId] = arraySet.Insert(chunkReplication.Replication[chunkId], chunkServerId)
+		chunkReplication.Replication[chunkId] = utils.Insert(chunkReplication.Replication[chunkId], chunkServerId)
 		chunkReplication.mutex.Unlock()
 	}
 	for _, chunkId := range removed {
 		chunkReplication.mutex.Lock()
-		chunkReplication.Replication[chunkId] = arraySet.Remove(chunkReplication.Replication[chunkId], chunkServerId)
+		chunkReplication.Replication[chunkId] = utils.Remove(chunkReplication.Replication[chunkId], chunkServerId)
 		chunkReplication.mutex.Unlock()
 	}
 	// TODO we can't immediately act
@@ -334,7 +332,7 @@ func (masterService *MasterService) lockAncestors(path string, f func(value any)
 	return errors.New("a parent directory does not exist " + ancestor)
 }
 
-func (masterService *MasterService) MkdirRPC(request rpcdefs.MkdirArgs, _ *rpcdefs.MkdirReply) (err error) {
+func (masterService *MasterService) MkdirRPC(request utils.MkdirArgs, _ *utils.MkdirReply) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -373,7 +371,7 @@ func (masterService *MasterService) MkdirRPC(request rpcdefs.MkdirArgs, _ *rpcde
 	return
 }
 
-func (masterService *MasterService) RmdirRPC(request rpcdefs.RmdirArgs, _ *rpcdefs.RmdirReply) (err error) {
+func (masterService *MasterService) RmdirRPC(request utils.RmdirArgs, _ *utils.RmdirReply) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -418,14 +416,14 @@ func (masterService *MasterService) RmdirRPC(request rpcdefs.RmdirArgs, _ *rpcde
 			}
 
 			// Remove directory from parent directory
-			fileSystemEntry.Files = arraySet.Remove(fileSystemEntry.Files, path)
+			fileSystemEntry.Files = utils.Remove(fileSystemEntry.Files, path)
 		}
 	})
 
 	return
 }
 
-func (masterService *MasterService) LsRPC(request rpcdefs.LsArgs, reply *rpcdefs.LsReply) (err error) {
+func (masterService *MasterService) LsRPC(request utils.LsArgs, reply *utils.LsReply) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -438,7 +436,7 @@ func (masterService *MasterService) LsRPC(request rpcdefs.LsArgs, reply *rpcdefs
 		case *File:
 			paths := make([]string, 1)
 			paths[0] = path
-			*reply = rpcdefs.LsReply{
+			*reply = utils.LsReply{
 				Paths: paths,
 			}
 			return
@@ -447,7 +445,7 @@ func (masterService *MasterService) LsRPC(request rpcdefs.LsArgs, reply *rpcdefs
 			fileSystemEntry.mutex.RLock()
 			defer fileSystemEntry.mutex.RUnlock()
 
-			*reply = rpcdefs.LsReply{
+			*reply = utils.LsReply{
 				Paths: fileSystemEntry.Files,
 			}
 		}
@@ -456,7 +454,7 @@ func (masterService *MasterService) LsRPC(request rpcdefs.LsArgs, reply *rpcdefs
 	return
 }
 
-func (masterService *MasterService) CreateRPC(request rpcdefs.CreateArgs, _ *rpcdefs.CreateReply) (err error) {
+func (masterService *MasterService) CreateRPC(request utils.CreateArgs, _ *utils.CreateReply) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -496,7 +494,7 @@ func (masterService *MasterService) CreateRPC(request rpcdefs.CreateArgs, _ *rpc
 	return
 }
 
-func (masterService *MasterService) DeleteRPC(request rpcdefs.DeleteArgs, _ *rpcdefs.DeleteReply) (err error) {
+func (masterService *MasterService) DeleteRPC(request utils.DeleteArgs, _ *utils.DeleteReply) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -542,14 +540,14 @@ func (masterService *MasterService) DeleteRPC(request rpcdefs.DeleteArgs, _ *rpc
 			}
 
 			// Remove file from its parent directory
-			fileSystemEntry.Files = arraySet.Remove(fileSystemEntry.Files, path)
+			fileSystemEntry.Files = utils.Remove(fileSystemEntry.Files, path)
 		}
 	})
 
 	return
 }
 
-func (masterService *MasterService) RecordAppendChunksRPC(request rpcdefs.RecordAppendChunksArgs, reply *rpcdefs.RecordAppendChunksReply) (err error) {
+func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAppendChunksArgs, reply *utils.RecordAppendChunksReply) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -569,13 +567,13 @@ func (masterService *MasterService) RecordAppendChunksRPC(request rpcdefs.Record
 			err = errors.New("trying to read a directory")
 			return
 		case *File:
-			var chunkId common.ChunkId
-			servers := make([]common.ChunkServer, 0)
+			var chunkId utils.ChunkId
+			servers := make([]utils.ChunkServer, 0)
 
 			fileSystemEntry.mutex.RLock()
 			nr := max(request.Nr, len(fileSystemEntry.chunks)-1)
 			fileSystemEntry.mutex.RUnlock()
-			var primaryId common.ChunkServerId
+			var primaryId utils.ChunkServerId
 			fileSystemEntry.iterate(masterService, nr, nr, func(chunk *ChunkMetadataMaster) bool {
 				chunkId = (*chunk).Id
 
@@ -586,7 +584,7 @@ func (masterService *MasterService) RecordAppendChunksRPC(request rpcdefs.Record
 				for _, chunkServerId := range selectedServers {
 					chunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
 					if exists {
-						servers = arraySet.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
+						servers = utils.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
 					}
 				}
 
@@ -603,20 +601,20 @@ func (masterService *MasterService) RecordAppendChunksRPC(request rpcdefs.Record
 			}
 
 			// Reply with info about servers
-			replication := make([]rpcdefs.ChunkReplication, 0)
+			replication := make([]utils.ChunkReplication, 0)
 			masterService.ChunkLocationData.ChunkReplication.mutex.Lock()
-			chunkReplication := rpcdefs.ChunkReplication{
+			chunkReplication := utils.ChunkReplication{
 				Id:      chunkId,
 				Servers: masterService.ChunkLocationData.ChunkReplication.Replication[chunkId],
 			}
 			replication = append(replication, chunkReplication)
 			masterService.ChunkLocationData.ChunkReplication.mutex.Unlock()
 
-			*reply = rpcdefs.RecordAppendChunksReply{
+			*reply = utils.RecordAppendChunksReply{
 				Nr:        nr,
 				Id:        chunkId,
 				PrimaryId: primaryId,
-				ServersLocation: rpcdefs.ServersLocation{
+				ServersLocation: utils.ServersLocation{
 					Servers:     servers,
 					Replication: replication,
 				},
@@ -632,7 +630,7 @@ const (
 	WRITE = iota
 )
 
-func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.ReadWriteChunks, reply *rpcdefs.ChunksAndServersLocation) (err error) {
+func (masterService *MasterService) readWriteChunks(mode int, request utils.ReadWriteChunks, reply *utils.ChunksAndServersLocation) (err error) {
 	var path string
 	path, err = normalize(request.Path)
 	if err != nil {
@@ -652,15 +650,15 @@ func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.Re
 			err = errors.New("trying to read a directory")
 			return
 		case *File:
-			startChunkNr := int(request.Offset / common.ChunkSize)
-			endChunkNr := int((request.Offset + request.Length - 1) / common.ChunkSize)
+			startChunkNr := int(request.Offset / utils.ChunkSize)
+			endChunkNr := int((request.Offset + request.Length - 1) / utils.ChunkSize)
 
-			chunks := make([]common.ChunkId, 0, endChunkNr-startChunkNr+1)
-			servers := make([]common.ChunkServer, 0)
+			chunks := make([]utils.ChunkId, 0, endChunkNr-startChunkNr+1)
+			servers := make([]utils.ChunkServer, 0)
 
 			// TODO if one does not exist respond with error
 			// TODO do not initialize anything if absent
-			var primaryId common.ChunkServerId
+			var primaryId utils.ChunkServerId
 			fileSystemEntry.iterate(masterService, startChunkNr, endChunkNr, func(chunk *ChunkMetadataMaster) bool {
 				chunks = append(chunks, (*chunk).Id)
 
@@ -675,7 +673,7 @@ func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.Re
 				for _, chunkServerId := range selectedServers {
 					chunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
 					if exists {
-						servers = arraySet.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
+						servers = utils.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
 					}
 				}
 
@@ -693,10 +691,10 @@ func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.Re
 			}
 
 			// Reply with info about servers
-			replication := make([]rpcdefs.ChunkReplication, 0)
+			replication := make([]utils.ChunkReplication, 0)
 			masterService.ChunkLocationData.ChunkReplication.mutex.Lock()
 			for _, chunkId := range chunks {
-				chunkReplication := rpcdefs.ChunkReplication{
+				chunkReplication := utils.ChunkReplication{
 					Id:      chunkId,
 					Servers: masterService.ChunkLocationData.ChunkReplication.Replication[chunkId],
 				}
@@ -704,9 +702,9 @@ func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.Re
 			}
 			masterService.ChunkLocationData.ChunkReplication.mutex.Unlock()
 
-			*reply = rpcdefs.WriteChunksReply{
+			*reply = utils.WriteChunksReply{
 				PrimaryId: primaryId,
-				ServersLocation: rpcdefs.ServersLocation{
+				ServersLocation: utils.ServersLocation{
 					Servers:     servers,
 					Replication: replication,
 				},
@@ -718,10 +716,10 @@ func (masterService *MasterService) readWriteChunks(mode int, request rpcdefs.Re
 	return nil
 }
 
-func (masterService *MasterService) WriteChunksRPC(request rpcdefs.WriteChunksArgs, reply *rpcdefs.WriteChunksReply) error {
+func (masterService *MasterService) WriteChunksRPC(request utils.WriteChunksArgs, reply *utils.WriteChunksReply) error {
 	return masterService.readWriteChunks(WRITE, request, reply)
 }
 
-func (masterService *MasterService) ReadChunksRPC(request rpcdefs.ReadChunksArgs, reply *rpcdefs.ReadChunksReply) error {
+func (masterService *MasterService) ReadChunksRPC(request utils.ReadChunksArgs, reply *utils.ReadChunksReply) error {
 	return masterService.readWriteChunks(READ, request, reply)
 }

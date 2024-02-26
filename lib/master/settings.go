@@ -6,5 +6,6 @@ import (
 
 type Settings struct {
 	utils.Endpoint
-	Folder string
+	Folder                 string
+	DefaultReplicationGoal uint32
 }

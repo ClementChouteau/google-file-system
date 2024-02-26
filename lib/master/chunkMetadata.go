@@ -65,7 +65,7 @@ func (chunk *ChunkMetadataMaster) ensureInitialized(masterService *MasterService
 	if !chunk.Initialized {
 		// TODO lock initialization
 		chunk.Initialized = true
-		replicationGoal := masterService.DefaultReplicationGoal.Load()
+		replicationGoal := masterService.Settings.DefaultReplicationGoal
 		chunk.ReplicationGoal = replicationGoal
 		servers = masterService.getChunkServersForNewChunk(replicationGoal)
 

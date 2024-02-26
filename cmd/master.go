@@ -29,9 +29,9 @@ func main() {
 			Host: *host,
 			Port: *port,
 		},
-		Folder: *folder,
+		Folder:                 *folder,
+		DefaultReplicationGoal: 3,
 	}
-	masterService.DefaultReplicationGoal.Store(3)
 	masterService.ChunkLocationData.ChunkReplication.Replication = make(map[utils.ChunkId][]utils.ChunkServerId)
 	root := &master.Directory{
 		Files: make([]string, 0),

@@ -98,7 +98,6 @@ type MasterService struct {
 	Settings                   Settings
 	nextAvailableChunkId       atomic.Uint32
 	nextAvailableChunkServerId atomic.Uint32
-	DefaultReplicationGoal     atomic.Uint32
 	Namespace                  sync.Map // string => *Directory | *File
 	ChunkLocationData          ChunkLocationData
 }

@@ -41,11 +41,11 @@ type Directory struct {
 type File struct {
 	// TODO add methods ?
 	mutex  sync.RWMutex
-	chunks []*ChunkMetadataMaster // consecutive
+	chunks []*Chunk // consecutive
 }
 
 func (file *File) appendUninitializedChunk(chunkId utils.ChunkId) {
-	uninitializedChunk := &ChunkMetadataMaster{
+	uninitializedChunk := &Chunk{
 		Id:              chunkId,
 		Initialized:     false,
 		ReplicationGoal: 0,
@@ -54,7 +54,7 @@ func (file *File) appendUninitializedChunk(chunkId utils.ChunkId) {
 	file.chunks = append(file.chunks, uninitializedChunk)
 }
 
-func (file *File) iterate(masterService *MasterService, startChunkNr int, endChunkNr int, f func(chunk *ChunkMetadataMaster) bool) {
+func (file *File) iterate(masterService *MasterService, startChunkNr int, endChunkNr int, f func(chunk *Chunk) bool) {
 	// Ensure that we have uninitialized chunks
 	file.mutex.Lock()
 	for len(file.chunks) < endChunkNr+1 {
@@ -438,7 +438,7 @@ func (masterService *MasterService) CreateRPC(request utils.CreateArgs, _ *utils
 
 			// Creating the file
 			file := &File{
-				chunks: make([]*ChunkMetadataMaster, 0),
+				chunks: make([]*Chunk, 0),
 			}
 			_, exists := masterService.Namespace.LoadOrStore(path, file)
 			if exists {
@@ -534,7 +534,7 @@ func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAp
 			fileSystemEntry.mutex.RLock()
 			nr := max(request.Nr, len(fileSystemEntry.chunks)-1)
 			fileSystemEntry.mutex.RUnlock()
-			fileSystemEntry.iterate(masterService, nr, nr, func(chunk *ChunkMetadataMaster) bool {
+			fileSystemEntry.iterate(masterService, nr, nr, func(chunk *Chunk) bool {
 				chunkId = (*chunk).Id
 
 				selectedServers := (*chunk).ensureInitialized(masterService)
@@ -547,11 +547,10 @@ func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAp
 					}
 				}
 
-				err = (*chunk).ensureLease(masterService)
+				primaryServerId, err = (*chunk).ensureLease(masterService)
 				if err != nil {
 					return false
 				}
-				primaryServerId = (*chunk).Primary
 
 				return false
 			})
@@ -624,7 +623,7 @@ func (masterService *MasterService) readWriteChunks(mode int, request utils.Read
 
 			// TODO if one does not exist respond with error
 			// TODO do not initialize anything if absent
-			fileSystemEntry.iterate(masterService, startChunkNr, endChunkNr, func(chunk *ChunkMetadataMaster) bool {
+			fileSystemEntry.iterate(masterService, startChunkNr, endChunkNr, func(chunk *Chunk) bool {
 				chunks = append(chunks, (*chunk).Id)
 
 				if mode == READ && !chunk.Initialized { // TODO lock
@@ -642,11 +641,12 @@ func (masterService *MasterService) readWriteChunks(mode int, request utils.Read
 				}
 
 				if mode == WRITE {
-					err = (*chunk).ensureLease(masterService)
+					var primaryServerId utils.ChunkServerId
+					primaryServerId, err = (*chunk).ensureLease(masterService)
 					if err != nil {
 						return false
 					}
-					primaryServers[chunk.Id] = (*chunk).Primary
+					primaryServers[chunk.Id] = primaryServerId
 				}
 				return true
 			})

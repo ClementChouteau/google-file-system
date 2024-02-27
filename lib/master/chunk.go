@@ -7,27 +7,40 @@ import (
 	"time"
 )
 
-type ChunkMetadataMaster struct {
+type Lease struct {
+	Mutex     sync.Mutex
+	GrantTime time.Time // Time point when sending the lease
+	Primary   utils.ChunkServerId
+}
+
+func (lease *Lease) grant(primary utils.ChunkServerId) {
+	lease.Primary = primary
+	lease.GrantTime = time.Now()
+}
+
+func (lease *Lease) has() bool {
+	return lease.GrantTime.IsZero() && time.Now().Before(lease.GrantTime.Add(utils.LeaseDuration))
+}
+
+type Chunk struct {
 	Id              utils.ChunkId
 	Initialized     bool // Uninitialized chunks can be parts of sparse files, they have no replication
 	ReplicationGoal uint32
-	LeaseMutex      sync.Mutex
-	Lease           time.Time // Time point when sending the lease
-	Primary         utils.ChunkServerId
+	Lease           Lease
 }
 
-func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err error) {
-	chunk.LeaseMutex.Lock()
-	defer chunk.LeaseMutex.Unlock()
-	hasLease := !chunk.Lease.IsZero() && time.Now().Before(chunk.Lease.Add(utils.LeaseDuration))
+func (chunk *Chunk) ensureLease(masterService *MasterService) (utils.ChunkServerId, error) {
+	chunk.Lease.Mutex.Lock()
+	defer chunk.Lease.Mutex.Unlock()
+	hasLease := chunk.Lease.has()
 	if !hasLease {
 		// Choose one of the chunk servers as the primary
 		replication := masterService.ChunkLocationData.ChunkReplication.Replication[chunk.Id]
 		if len(replication) == 0 {
-			return errors.New("no servers replicating the chunk")
+			return 0, errors.New("no servers replicating the chunk")
 		}
 		primaryServerId := masterService.chooseLeastLeased(replication)
-		chunk.Primary = primaryServerId
+		chunk.Lease.Primary = primaryServerId
 		primaryChunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(primaryServerId)
 		primaryChunkServer := primaryChunkServerMetadata.(*ChunkServerMetadata).ChunkServer
 
@@ -47,21 +60,20 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 				ChunkId:     chunk.Id,
 				Replication: servers,
 			}
-			err = primaryChunkServer.Endpoint.Call("ChunkService.GrantLeaseRPC", request, &utils.GrantLeaseReply{})
+			err := primaryChunkServer.Endpoint.Call("ChunkService.GrantLeaseRPC", request, &utils.GrantLeaseReply{})
 			if err != nil {
-				return
+				return 0, err
 			}
-			chunk.Primary = primaryChunkServer.Id
-			chunk.Lease = time.Now()
+			chunk.Lease.grant(primaryServerId)
 			primaryChunkServerMetadata.(*ChunkServerMetadata).leaseCount.Add(1)
 		} else {
-			return errors.New("server not found")
+			return 0, errors.New("server not found")
 		}
 	}
-	return
+	return chunk.Lease.Primary, nil
 }
 
-func (chunk *ChunkMetadataMaster) ensureInitialized(masterService *MasterService) (servers []utils.ChunkServerId) {
+func (chunk *Chunk) ensureInitialized(masterService *MasterService) (servers []utils.ChunkServerId) {
 	if !chunk.Initialized {
 		// TODO lock initialization
 		chunk.Initialized = true

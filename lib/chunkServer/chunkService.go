@@ -58,10 +58,10 @@ func (chunkService *ChunkService) readChunkMetadataFromDisk() (count int, err er
 			return 0, err
 		}
 
-		chunkMetadata := &Chunk{
+		chunk := &Chunk{
 			Id: utils.ChunkId(id),
 		}
-		chunkService.chunks.Store(utils.ChunkId(id), chunkMetadata)
+		chunkService.chunks.Store(utils.ChunkId(id), chunk)
 		count++
 	}
 

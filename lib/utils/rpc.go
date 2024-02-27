@@ -122,8 +122,8 @@ func (serversLocation *ServersLocation) FindReplication(id ChunkId) *[]ChunkServ
 }
 
 type ChunksAndServersLocation struct {
-	Chunks    []ChunkId // Chunks of the file in order
-	PrimaryId ChunkServerId
+	Chunks         []ChunkId // Chunks of the file in order
+	PrimaryServers map[ChunkId]ChunkServerId
 	ServersLocation
 }
 

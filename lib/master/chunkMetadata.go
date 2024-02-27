@@ -8,12 +8,12 @@ import (
 )
 
 type ChunkMetadataMaster struct {
-	Id                  utils.ChunkId
-	Initialized         bool // Uninitialized chunks can be parts of sparse files, they have no replication
-	ReplicationGoal     uint32
-	LeaseMutex          sync.Mutex
-	Lease               time.Time // Time point when sending the lease
-	LeasedChunkServerId utils.ChunkServerId
+	Id              utils.ChunkId
+	Initialized     bool // Uninitialized chunks can be parts of sparse files, they have no replication
+	ReplicationGoal uint32
+	LeaseMutex      sync.Mutex
+	Lease           time.Time // Time point when sending the lease
+	Primary         utils.ChunkServerId
 }
 
 func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err error) {
@@ -24,10 +24,10 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 		// Choose one of the chunk servers as the primary
 		replication := masterService.ChunkLocationData.ChunkReplication.Replication[chunk.Id]
 		if len(replication) == 0 {
-			// TODO error case
-			return
+			return errors.New("no servers replicating the chunk")
 		}
 		primaryServerId := masterService.chooseLeastLeased(replication)
+		chunk.Primary = primaryServerId
 		primaryChunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(primaryServerId)
 		primaryChunkServer := primaryChunkServerMetadata.(*ChunkServerMetadata).ChunkServer
 
@@ -51,7 +51,7 @@ func (chunk *ChunkMetadataMaster) ensureLease(masterService *MasterService) (err
 			if err != nil {
 				return
 			}
-			chunk.LeasedChunkServerId = primaryChunkServer.Id
+			chunk.Primary = primaryChunkServer.Id
 			chunk.Lease = time.Now()
 			primaryChunkServerMetadata.(*ChunkServerMetadata).leaseCount.Add(1)
 		} else {

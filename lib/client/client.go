@@ -187,18 +187,24 @@ masterLoop:
 			}
 			writeEnd := min(uint32((i+1)*utils.ChunkSize)-chunkRange.Offset%utils.ChunkSize, uint32(len(data)))
 
+			servers := make([]utils.ChunkServer, 0, len(*serverIds))
+			for _, serverId := range *serverIds {
+				server := masterReply.FindServer(serverId)
+				if server == nil {
+					return errors.New("invalid response from master, missing server info")
+				}
+				servers = append(servers, *server)
+			}
+
 			// Push data to all servers
 			dataRequest := utils.PushDataArgs{
 				Data:    data[writeStart:writeEnd],
 				Id:      uuid.New(),
-				Servers: masterReply.Servers,
+				Servers: servers,
 			}
 			dataReply := &utils.PushDataReply{}
-			primaryServer := masterReply.FindServer(masterReply.PrimaryId) // TODO We should push to the closest server
-			if primaryServer == nil {
-				return errors.New("invalid response from master, missing server info")
-			}
-			err = primaryServer.Endpoint.Call("ChunkService.PushDataRPC", dataRequest, dataReply)
+			closestServer := servers[0]
+			err = closestServer.Endpoint.Call("ChunkService.PushDataRPC", dataRequest, dataReply)
 
 			// Commit on primary
 			chunkRequest := utils.WriteArgs{
@@ -208,6 +214,14 @@ masterLoop:
 			}
 			chunkReply := &utils.WriteReply{}
 
+			primaryServerId, exists := masterReply.PrimaryServers[chunkRange.id]
+			if !exists {
+				return errors.New("invalid response from master, missing primary info")
+			}
+			primaryServer := masterReply.FindServer(primaryServerId)
+			if primaryServer == nil {
+				return errors.New("invalid response from master, missing primary info")
+			}
 			err = primaryServer.Endpoint.Call("ChunkService.WriteRPC", chunkRequest, chunkReply)
 			if err != nil {
 				log.Println(err)
@@ -238,9 +252,8 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 			return
 		}
 
-		serverIds := masterReply.FindReplication(masterReply.Id)
-		if serverIds == nil {
-			return errors.New("invalid response from master, missing replication info")
+		if len(masterReply.Servers) == 0 {
+			return errors.New("invalid response from master, missing servers info")
 		}
 
 		// Push data to all servers
@@ -250,11 +263,8 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 			Servers: masterReply.Servers,
 		}
 		dataReply := utils.PushDataReply{}
-		primaryServer := masterReply.FindServer(masterReply.PrimaryId) // TODO We should push to the closest server
-		if primaryServer == nil {
-			return errors.New("invalid response from master, missing server info")
-		}
-		err = primaryServer.Endpoint.Call("ChunkService.PushDataRPC", dataRequest, &dataReply)
+		closestServer := masterReply.Servers[0]
+		err = closestServer.Endpoint.Call("ChunkService.PushDataRPC", dataRequest, &dataReply)
 
 		// Try to record append in this chunk
 		chunkRequest := utils.RecordAppendArgs{
@@ -262,6 +272,10 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 			DataId: dataRequest.Id,
 		}
 		chunkReply := utils.RecordAppendReply{}
+		primaryServer := masterReply.FindServer(masterReply.PrimaryId)
+		if primaryServer == nil {
+			return errors.New("invalid response from master, invalid primary")
+		}
 		err = primaryServer.Endpoint.Call("ChunkService.RecordAppendRPC", chunkRequest, &chunkReply)
 		if err != nil {
 			if utils.IsNoLeaseError(err) {

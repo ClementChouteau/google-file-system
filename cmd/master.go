@@ -33,10 +33,7 @@ func main() {
 		DefaultReplicationGoal: 3,
 	}
 	masterService.ChunkLocationData.ChunkReplication.Replication = make(map[utils.ChunkId][]utils.ChunkServerId)
-	root := &master.Directory{
-		Files: make([]string, 0),
-	}
-	masterService.Namespace.Store("/", root)
+	masterService.Namespace = master.NewNamespace()
 
 	err := rpc.Register(masterService)
 	if err != nil {

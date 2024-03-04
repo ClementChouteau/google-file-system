@@ -20,6 +20,11 @@ Based on the wording from the paper it appears so.
 
 ## Master server
 
+Two types of expiration are possible:
+1) A chunk server stops sending heartbeats, in this case it is excluded
+and its chunks are considered not replicated anymore.
+2) A chunk server reports fewer chunks than previously.
+
 ## Chunk server
 
 > How data integrity is ensured ?

@@ -18,9 +18,12 @@ func (masterService *MasterService) chooseLeastLeased(servers []utils.ChunkServe
 		value, exists := masterService.ChunkLocationData.chunkServers.Load(serverId)
 
 		if exists {
-			serverMetadata := value.(*ChunkServerMetadata)
+			server := value.(*ChunkServerMetadata)
+			if !server.available.Load() {
+				continue
+			}
 
-			leaseCount := serverMetadata.leaseCount.Load()
+			leaseCount := server.leaseCount.Load()
 			if leaseCount < leastLeasedCount {
 				leastLeasedCount = leaseCount
 				leastLeasedServer = serverId
@@ -37,6 +40,8 @@ type ChunkReplication struct {
 }
 
 type ChunkServerMetadata struct {
+	mutex     sync.RWMutex
+	available atomic.Bool
 	utils.ChunkServer
 	LastHeartbeat time.Time
 	Chunks        []utils.ChunkId
@@ -67,15 +72,23 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 	leastOccupiedServers := make([]OccupiedServer, 0, n) // No need to use a heap as n is small
 
 	masterService.ChunkLocationData.chunkServers.Range(func(key any, value any) bool {
+		id := key.(utils.ChunkServerId)
+
 		server := value.(*ChunkServerMetadata)
-		occupancy := len(server.Chunks) // TODO lock access
+		server.mutex.RLock()
+		if !server.available.Load() {
+			server.mutex.RUnlock()
+			return true
+		}
+		occupancy := len(server.Chunks)
+		server.mutex.RUnlock()
 
 		if len(leastOccupiedServers) < int(n) {
-			leastOccupiedServers = append(leastOccupiedServers, OccupiedServer{id: server.Id, occupancy: occupancy})
+			leastOccupiedServers = append(leastOccupiedServers, OccupiedServer{id: id, occupancy: occupancy})
 		} else {
 			for i, occupiedServer := range leastOccupiedServers {
 				if occupancy < occupiedServer.occupancy {
-					leastOccupiedServers[i] = OccupiedServer{id: server.Id, occupancy: occupancy}
+					leastOccupiedServers[i] = OccupiedServer{id: id, occupancy: occupancy}
 				}
 			}
 		}
@@ -90,18 +103,45 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 	return
 }
 
-func (masterService *MasterService) expireChunks(chunkServerId utils.ChunkServerId, expiredChunks []utils.ChunkId) {
+func (masterService *MasterService) changeChunkReplication(chunkServerId utils.ChunkServerId, added []utils.ChunkId, removed []utils.ChunkId) {
 	chunkReplication := &masterService.ChunkLocationData.ChunkReplication
-	chunkReplication.mutex.Lock()
-	for _, chunkId := range expiredChunks {
+
+	for _, chunkId := range removed {
+		chunkReplication.mutex.Lock()
 		replication := utils.Remove(chunkReplication.Replication[chunkId], chunkServerId)
 		chunkReplication.Replication[chunkId] = replication
+		chunkReplication.mutex.Unlock()
+
 		// TODO if below per chunk/file replication goal
+		if len(replication) < int(masterService.Settings.DefaultReplicationGoal) {
+			// TODO queue for re-replication, with priorities
+			log.Error().Msgf("chunk with id %d is under replicated", chunkId)
+		}
 		if len(replication) == 0 {
 			log.Error().Msgf("chunk with id %d has no replica, it is lost", chunkId)
 		}
 	}
-	chunkReplication.mutex.Unlock()
+
+	for _, chunkId := range added {
+		chunkReplication.mutex.Lock()
+		chunkReplication.Replication[chunkId] = utils.Insert(chunkReplication.Replication[chunkId], chunkServerId)
+		chunkReplication.mutex.Unlock()
+	}
+}
+
+func (masterService *MasterService) expireChunkServer(chunkServerId utils.ChunkServerId) {
+	chunkServers := &masterService.ChunkLocationData.chunkServers
+	value, exists := chunkServers.Load(chunkServerId)
+	if exists {
+		server := value.(*ChunkServerMetadata)
+		server.available.Store(false)
+
+		server.mutex.RLock()
+		defer server.mutex.RUnlock()
+		expiredChunks := server.Chunks
+		log.Error().Msgf("heartbeat timer expired for chunk server with id=%d containing %d chunks", chunkServerId, len(expiredChunks))
+		masterService.changeChunkReplication(chunkServerId, nil, expiredChunks)
+	}
 }
 
 func (masterService *MasterService) ensureChunkServer(endpoint utils.Endpoint, chunkServerId utils.ChunkServerId) bool {
@@ -116,27 +156,22 @@ func (masterService *MasterService) ensureChunkServer(endpoint utils.Endpoint, c
 		Chunks:        make([]utils.ChunkId, 0),
 		Heartbeat:     utils.NewResettableTimer(10 * time.Second),
 	}
+	newChunkServer.available.Store(true)
 
-	// TODO mutex heartbeats ?
-	chunkServer, exists := chunkServers.LoadOrStore(chunkServerId, newChunkServer)
+	value, exists := chunkServers.LoadOrStore(chunkServerId, newChunkServer)
 	var heartbeat *utils.ResettableTimer
 	if exists {
-		heartbeat = chunkServer.(*ChunkServerMetadata).Heartbeat
+		server := value.(*ChunkServerMetadata)
+		server.available.Store(true)
+		heartbeat = server.Heartbeat
 	} else {
-		// TODO no need to expire whatsoever when there is no chunks
 		heartbeat = newChunkServer.Heartbeat
 	}
 
 	go func() {
 		select {
 		case <-heartbeat.C:
-			chunkServers := &masterService.ChunkLocationData.chunkServers
-			chunkServer, exists := chunkServers.Load(chunkServerId)
-			if exists {
-				expiredChunks := chunkServer.(*ChunkServerMetadata).Chunks
-				log.Error().Msgf("heartbeat timer expired for chunk server with id=%d containing %d chunks", chunkServerId, len(expiredChunks))
-				masterService.expireChunks(chunkServerId, expiredChunks)
-			}
+			masterService.expireChunkServer(chunkServerId)
 		}
 	}()
 
@@ -165,45 +200,29 @@ func (masterService *MasterService) HeartbeatRPC(request utils.HeartBeatArgs, _ 
 	if !exists {
 		return errors.New("unregistered chunk server with id=" + strconv.Itoa(int(chunkServerId)))
 	}
-	chunkServer := value.(*ChunkServerMetadata)
+	server := value.(*ChunkServerMetadata)
 
-	// TODO reset the timer
-	chunkServer.Heartbeat.Reset(10 * time.Second)
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	server.Heartbeat.Reset(10 * time.Second)
 
 	currentTime := time.Now()
 	var previousTime time.Time
 	if exists {
-		previousTime = chunkServer.LastHeartbeat
+		previousTime = server.LastHeartbeat
 	} else {
 		previousTime = currentTime
 	}
-	chunkServer.LastHeartbeat = currentTime
-	added, removed := utils.Diff(chunkServer.Chunks, request.Chunks)
-	chunkServer.Chunks = request.Chunks
-	chunkServers.Store(chunkServerId, chunkServer)
+
+	server.LastHeartbeat = currentTime
+
+	added, removed := utils.Diff(server.Chunks, request.Chunks)
+	server.Chunks = request.Chunks
 
 	log.Debug().Msgf("heartbeat from chunk server with id=%d and %d chunks after %v", chunkServerId, len(request.Chunks), currentTime.Sub(previousTime))
 
-	chunkReplication := &masterService.ChunkLocationData.ChunkReplication
-	for _, chunkId := range added {
-		chunkReplication.mutex.Lock()
-		chunkReplication.Replication[chunkId] = utils.Insert(chunkReplication.Replication[chunkId], chunkServerId)
-		chunkReplication.mutex.Unlock()
-	}
-	for _, chunkId := range removed {
-		chunkReplication.mutex.Lock()
-		chunkReplication.Replication[chunkId] = utils.Remove(chunkReplication.Replication[chunkId], chunkServerId)
-		chunkReplication.mutex.Unlock()
-	}
-	// TODO we can't immediately act
-
-	// TODO   for additions => Impossible because master won't return a new chunk id before it being durable
-	// TODO   for missing => check replication
-
-	// TODO before setting it check if some Chunks disappeared
-	// TODO if so, check their replication status
-	// TODO if replication status is insufficient
-	// TODO queue for re-replication, with priorities
+	masterService.changeChunkReplication(chunkServerId, added, removed)
 
 	return nil
 }
@@ -325,9 +344,10 @@ func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAp
 
 			// Add corresponding servers to the reply
 			for _, chunkServerId := range selectedServers {
-				chunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
+				value, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
+				server := value.(*ChunkServerMetadata)
 				if exists {
-					servers = utils.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
+					servers = utils.Insert(servers, server.ChunkServer)
 				}
 			}
 
@@ -413,9 +433,10 @@ func (masterService *MasterService) readWriteChunks(mode int, request utils.Read
 
 			// Add corresponding servers to the reply
 			for _, chunkServerId := range selectedServers {
-				chunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
+				value, exists := masterService.ChunkLocationData.chunkServers.Load(chunkServerId)
+				server := value.(*ChunkServerMetadata)
 				if exists {
-					servers = utils.Insert(servers, chunkServerMetadata.(*ChunkServerMetadata).ChunkServer)
+					servers = utils.Insert(servers, server.ChunkServer)
 				}
 			}
 

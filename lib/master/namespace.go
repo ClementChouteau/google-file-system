@@ -59,7 +59,7 @@ type Namespace struct {
 
 // lockAncestors check ancestors and read lock all items in the path excluding the last one
 // Then either returns an error or calls f(value) which can be either *Directory | *File
-func (namespace *Namespace) lockAncestors(path string, f func(value any)) error {
+func (namespace *Namespace) lockAncestors(path string, f func(value any) error) error {
 	// TODO simplify parts logic
 	var parts []string
 	if path == "/" {
@@ -81,8 +81,7 @@ func (namespace *Namespace) lockAncestors(path string, f func(value any)) error 
 		}
 
 		if i == n-1 {
-			f(value)
-			return nil
+			return f(value)
 		}
 
 		switch fileSystemEntry := value.(type) {
@@ -98,33 +97,30 @@ func (namespace *Namespace) lockAncestors(path string, f func(value any)) error 
 }
 
 // LockFileAncestors does not lock the file itself, only its ancestors
-func (namespace *Namespace) LockFileAncestors(path string, f func(file *File)) (err error) {
-	err = namespace.lockAncestors(path, func(value any) {
+func (namespace *Namespace) LockFileAncestors(path string, f func(file *File)) error {
+	return namespace.lockAncestors(path, func(value any) error {
 		value, exists := namespace.items.Load(path)
 		// Check if the file exists
 		if !exists {
-			err = errors.New("no such file or directory")
-			return
+			return errors.New("no such file or directory")
 		}
 
 		switch fileSystemEntry := value.(type) {
 		case *Directory:
-			err = errors.New("trying to read a directory")
-			return
+			return errors.New("trying to read a directory")
 		case *File:
 			f(fileSystemEntry)
 		}
+		return nil
 	})
-	return
 }
 
-func (namespace *Namespace) Mkdir(path string) (err error) {
+func (namespace *Namespace) Mkdir(path string) error {
 	directory := parentPath(path)
-	err = namespace.lockAncestors(directory, func(value any) {
+	return namespace.lockAncestors(directory, func(value any) error {
 		switch fileSystemEntry := value.(type) {
 		case *File:
-			err = errors.New("parent directory is a file")
-			return
+			return errors.New("parent directory is a file")
 		case *Directory:
 			// Write lock parent directory
 			fileSystemEntry.mutex.Lock()
@@ -135,24 +131,22 @@ func (namespace *Namespace) Mkdir(path string) (err error) {
 				Files: make([]string, 0),
 			}
 			if _, exists := namespace.items.LoadOrStore(path, newDirectory); exists {
-				err = errors.New("directory already exists")
-				return
+				return errors.New("directory already exists")
 			}
 
 			// Insert new directory in parent directory
 			fileSystemEntry.Files = append(fileSystemEntry.Files, path)
 		}
+		return nil
 	})
-	return
 }
 
-func (namespace *Namespace) Rmdir(path string) (err error) {
+func (namespace *Namespace) Rmdir(path string) error {
 	directory := parentPath(path)
-	err = namespace.lockAncestors(directory, func(value any) {
+	return namespace.lockAncestors(directory, func(value any) error {
 		switch fileSystemEntry := value.(type) {
 		case *File:
-			err = errors.New("parent directory is a file")
-			return
+			return errors.New("parent directory is a file")
 		case *Directory:
 			// Write lock parent directory
 			fileSystemEntry.mutex.Lock()
@@ -161,20 +155,18 @@ func (namespace *Namespace) Rmdir(path string) (err error) {
 			// Check that directory to remove exists and is empty
 			value, exists := namespace.items.Load(path)
 			if !exists {
-				err = errors.New("no such directory")
-				return
+				return errors.New("no such directory")
 			}
 
 			switch fileSystemEntry := value.(type) {
 			case *File:
-				err = errors.New("can't remove file")
-				return
+				return errors.New("can't remove file")
 			case *Directory:
 				fileSystemEntry.mutex.RLock()
 				defer fileSystemEntry.mutex.RUnlock()
 
 				if len(fileSystemEntry.Files) != 0 {
-					err = errors.New("directory is not empty")
+					return errors.New("directory is not empty")
 				}
 
 				namespace.items.Delete(path)
@@ -183,34 +175,33 @@ func (namespace *Namespace) Rmdir(path string) (err error) {
 			// Remove directory from parent directory
 			fileSystemEntry.Files = utils.Remove(fileSystemEntry.Files, path)
 		}
+		return nil
 	})
-	return
 }
 
 func (namespace *Namespace) Ls(path string) (paths []string, err error) {
-	err = namespace.lockAncestors(path, func(value any) {
+	return paths, namespace.lockAncestors(path, func(value any) error {
 		switch fileSystemEntry := value.(type) {
 		case *File:
 			paths = make([]string, 1)
 			paths[0] = path
-			return
+			break
 		case *Directory:
 			// Read lock directory
 			fileSystemEntry.mutex.RLock()
 			defer fileSystemEntry.mutex.RUnlock()
 			paths = fileSystemEntry.Files
 		}
+		return nil
 	})
-	return
 }
 
-func (namespace *Namespace) Create(path string) (err error) {
+func (namespace *Namespace) Create(path string) error {
 	directory := parentPath(path)
-	err = namespace.lockAncestors(directory, func(value any) {
+	return namespace.lockAncestors(directory, func(value any) error {
 		switch fileSystemEntry := value.(type) {
 		case *File:
-			err = errors.New("parent directory is a file")
-			return
+			return errors.New("parent directory is a file")
 		case *Directory:
 			// Write lock parent directory
 			fileSystemEntry.mutex.Lock()
@@ -222,24 +213,22 @@ func (namespace *Namespace) Create(path string) (err error) {
 			}
 			_, exists := namespace.items.LoadOrStore(path, file)
 			if exists {
-				err = errors.New("file already exists")
-				return
+				return errors.New("file already exists")
 			}
 
 			// Inserting the file in its parent directory
 			fileSystemEntry.Files = append(fileSystemEntry.Files, path)
 		}
+		return nil
 	})
-	return
 }
 
 func (namespace *Namespace) Delete(path string) (file *File, err error) {
 	directory := parentPath(path)
-	err = namespace.lockAncestors(directory, func(value any) {
+	return file, namespace.lockAncestors(directory, func(value any) error {
 		switch fileSystemEntry := value.(type) {
 		case *File:
-			err = errors.New("parent directory is a file")
-			return
+			return errors.New("parent directory is a file")
 		case *Directory:
 			// Write lock parent directory
 			fileSystemEntry.mutex.Lock()
@@ -248,8 +237,7 @@ func (namespace *Namespace) Delete(path string) (file *File, err error) {
 			// Check if file to remove is indeed a file and exists
 			value, exists := namespace.items.Load(path)
 			if !exists {
-				err = errors.New("no such file")
-				return
+				return errors.New("no such file")
 			}
 			switch fileSystemEntry := value.(type) {
 			case *File:
@@ -257,13 +245,12 @@ func (namespace *Namespace) Delete(path string) (file *File, err error) {
 				// Remove file
 				namespace.items.Delete(path)
 			case *Directory:
-				err = errors.New("file to delete is a directory")
-				return
+				return errors.New("file to delete is a directory")
 			}
 
 			// Remove file from its parent directory
 			fileSystemEntry.Files = utils.Remove(fileSystemEntry.Files, path)
 		}
+		return nil
 	})
-	return
 }

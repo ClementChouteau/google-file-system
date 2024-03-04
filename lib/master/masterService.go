@@ -283,7 +283,11 @@ func (masterService *MasterService) DeleteRPC(request utils.DeleteArgs, _ *utils
 	var file *File
 	file, err = masterService.Namespace.Delete(path)
 
-	if file == nil || err != nil {
+	if file == nil {
+		return errors.New("no such file")
+	}
+
+	if err != nil {
 		return
 	}
 

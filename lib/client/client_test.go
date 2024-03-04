@@ -13,9 +13,7 @@ func TestMkdir(t *testing.T) {
 	assert.Error(t, client.Mkdir(""), "Path must start with root")
 	assert.Error(t, client.Mkdir("/"), "Cannot create root directory")
 	assert.NoError(t, client.Mkdir("/mkdir"))
-	// TODO
-	// assert.Error(t, client.Mkdir("/mkdir/"), "Trying to create an already existing directory")
-	assert.NoError(t, client.Mkdir("/mkdir"))
+	assert.Error(t, client.Mkdir("/mkdir/"), "Trying to create an already existing directory")
 	assert.NoError(t, client.Mkdir("/mkdir2/"))
 }
 
@@ -26,16 +24,14 @@ func TestRmdir(t *testing.T) {
 
 	assert.Error(t, client.Rmdir(""), "Cannot remove empty path")
 	assert.Error(t, client.Rmdir("/"), "Cannot remove root directory")
-	// TODO
-	// assert.Error(t, client.Rmdir("/rmdir2"), "Cannot remove non-existing directory")
+	assert.Error(t, client.Rmdir("/rmdir2"), "Cannot remove non-existing directory")
 
 	assert.NoError(t, client.Mkdir("/rmdir"))
 	assert.NoError(t, client.Rmdir("/rmdir"))
 
 	assert.NoError(t, client.Mkdir("/rmdir_root"))
 	assert.NoError(t, client.Mkdir("/rmdir_root/rmdir"))
-	// TODO
-	// sassert.Error(t, client.Rmdir("/rmdir_root"), "Cannot remove non empty directory")
+	assert.Error(t, client.Rmdir("/rmdir_root"), "Cannot remove non empty directory")
 	assert.NoError(t, client.Rmdir("/rmdir_root/rmdir"), "Removing nested directory")
 }
 
@@ -45,12 +41,10 @@ func TestCreate(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, client.Create("/a"))
-	// TODO
-	// assert.Error(t, client.Create("/a"), "File already exists")
+	assert.Error(t, client.Create("/a"), "File already exists")
 	assert.NoError(t, client.Mkdir("/create"))
 	assert.NoError(t, client.Create("/create/b"))
-	// TODO
-	// assert.Error(t, client.Create("/create/b"), "File already exists")
+	assert.Error(t, client.Create("/create/b"), "File already exists")
 	assert.NoError(t, client.Mkdir("/create/nested"))
 	assert.NoError(t, client.Create("/create/nested/c"))
 }
@@ -63,8 +57,7 @@ func TestDelete(t *testing.T) {
 	assert.NoError(t, client.Create("/x"))
 	assert.NoError(t, client.Create("/y"))
 	assert.NoError(t, client.Delete("/x"))
-	// TODO
-	// assert.Error(t, client.Delete("/a"))
+	assert.Error(t, client.Delete("/e"))
 
 	assert.NoError(t, client.Mkdir("/delete"))
 	assert.NoError(t, client.Create("/delete/y"))

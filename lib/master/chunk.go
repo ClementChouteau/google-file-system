@@ -40,9 +40,8 @@ func (chunk *Chunk) ensureLease(masterService *MasterService) (utils.ChunkServer
 			return 0, errors.New("no servers replicating the chunk")
 		}
 		primaryServerId := masterService.ChunkLocationData.chooseLeastLeased(replication)
-		chunk.Lease.Primary = primaryServerId
-		primaryChunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(primaryServerId)
-		primaryChunkServer := primaryChunkServerMetadata.(*ChunkServerMetadata).ChunkServer
+		value, exists := masterService.ChunkLocationData.chunkServers.Load(primaryServerId)
+		primaryChunkServer := value.(*ChunkServerMetadata)
 
 		// Add corresponding servers to the reply
 		replicas := utils.Remove(replication, primaryServerId)
@@ -65,7 +64,7 @@ func (chunk *Chunk) ensureLease(masterService *MasterService) (utils.ChunkServer
 				return 0, err
 			}
 			chunk.Lease.grant(primaryServerId)
-			primaryChunkServerMetadata.(*ChunkServerMetadata).leaseCount.Add(1)
+			primaryChunkServer.leaseCount.Add(1)
 		} else {
 			return 0, errors.New("server not found")
 		}

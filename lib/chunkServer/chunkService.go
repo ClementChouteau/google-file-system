@@ -32,12 +32,7 @@ type ChunkService struct {
 }
 
 func (chunkService *ChunkService) ensureFolders() (err error) {
-	err = os.Mkdir(chunkService.settings.Folder, 0755)
-	if err != nil && !os.IsExist(err) {
-		return err
-	}
-
-	err = os.Mkdir(chunkService.settings.GetChunksFolder(), 0755)
+	err = os.MkdirAll(chunkService.settings.GetChunksFolder(), 0755)
 	if err != nil && !os.IsExist(err) {
 		return err
 	}

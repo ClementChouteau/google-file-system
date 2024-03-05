@@ -27,6 +27,11 @@ and its chunks are considered not replicated anymore.
 
 ## Chunk server
 
+> When are chunks created ?
+
+Chunks are created when a client wants to write to them.
+The chunk file is created on primary and replicas when receiving lease.
+
 > How data integrity is ensured ?
 
 We assume to be in a crash-stop model where crash of all 3 (minimum replication factor)

@@ -256,7 +256,7 @@ func (chunkService *ChunkService) readTemporary(id uuid.UUID) (data []byte, exis
 	return value, exists
 }
 
-// Ensure that the chunk exists, writes it
+// ensureChunk ensures that the chunk exists, writes it
 func (chunkService *ChunkService) ensureChunk(id utils.ChunkId, create bool) (chunk *Chunk, err error) {
 	newChunk := &Chunk{
 		Id: id,
@@ -265,6 +265,7 @@ func (chunkService *ChunkService) ensureChunk(id utils.ChunkId, create bool) (ch
 
 	if !create && !exists {
 		err = errors.New("no corresponding chunk")
+		log.Error().Err(err).Uint32("chunk", id)
 		return
 	}
 
@@ -281,6 +282,11 @@ func (chunkService *ChunkService) ensureChunk(id utils.ChunkId, create bool) (ch
 		log.Debug().Msgf("created chunk %d", id)
 	}
 	return
+}
+
+// getChunk accesses the chunk, returns an error if it does not exist
+func (chunkService *ChunkService) getChunk(id utils.ChunkId) (chunk *Chunk, err error) {
+	return chunkService.ensureChunk(id, false)
 }
 
 func (chunkService *ChunkService) ReadRPC(request utils.ReadArgs, reply *utils.ReadReply) error {
@@ -302,9 +308,30 @@ func (chunkService *ChunkService) ReadRPC(request utils.ReadArgs, reply *utils.R
 	return nil
 }
 
+func (chunkService *ChunkService) EnsureChunkRPC(request utils.EnsureChunkArgs, _ *utils.EnsureChunkReply) error {
+	_, err := chunkService.ensureChunk(request.ChunkId, true)
+	return err
+}
+
 func (chunkService *ChunkService) GrantLeaseRPC(request utils.GrantLeaseArgs, _ *utils.GrantLeaseReply) error {
 	log.Debug().Msgf("received lease for chunk %d", request.ChunkId)
 
+	// Create the chunk on our replicas
+	ensureChunkRequest := utils.EnsureChunkArgs{
+		ChunkId: request.ChunkId,
+	}
+	for _, server := range request.Replication {
+		if server.Id == chunkService.id {
+			continue
+		}
+
+		err := server.Endpoint.Call("ChunkService.EnsureChunkRPC", &ensureChunkRequest, &utils.EnsureChunkReply{})
+		if err != nil {
+			return err
+		}
+	}
+
+	// Create the chunk on primary
 	chunk, err := chunkService.ensureChunk(request.ChunkId, true)
 	if err != nil {
 		return err
@@ -362,9 +389,9 @@ func (chunkService *ChunkService) PushDataRPC(request utils.PushDataArgs, _ *uti
 
 // ApplyWriteRPC (replicas only)
 func (chunkService *ChunkService) ApplyWriteRPC(request utils.ApplyWriteArgs, _ *utils.ApplyWriteReply) error {
-	chunk, err := chunkService.ensureChunk(request.Id, true)
+	chunk, err := chunkService.getChunk(request.Id)
 	if err != nil {
-		log.Error().Err(err).Msg("calling ensureChunk")
+		log.Error().Err(err).Msg("calling getChunk")
 		return err
 	}
 
@@ -387,9 +414,9 @@ func (chunkService *ChunkService) ApplyWriteRPC(request utils.ApplyWriteArgs, _ 
 
 // WriteRPC (primary only)
 func (chunkService *ChunkService) WriteRPC(request utils.WriteArgs, _ *utils.WriteReply) error {
-	chunk, err := chunkService.ensureChunk(request.Id, false)
+	chunk, err := chunkService.getChunk(request.Id)
 	if err != nil {
-		log.Error().Err(err).Msg("calling ensureChunk")
+		log.Error().Err(err).Msg("calling getChunk")
 		return err
 	}
 
@@ -420,9 +447,9 @@ func (chunkService *ChunkService) WriteRPC(request utils.WriteArgs, _ *utils.Wri
 
 // RecordAppendRPC (primary only)
 func (chunkService *ChunkService) RecordAppendRPC(request utils.RecordAppendArgs, reply *utils.RecordAppendReply) error {
-	chunk, err := chunkService.ensureChunk(request.Id, false) // Chunk is created when receiving lease
+	chunk, err := chunkService.getChunk(request.Id) // Chunk is created when receiving lease
 	if err != nil {
-		log.Error().Err(err).Msg("calling ensureChunk")
+		log.Error().Err(err).Msg("calling getChunk")
 		return err
 	}
 

@@ -50,6 +50,11 @@ type ReadReply struct {
 	Data []byte
 }
 
+type EnsureChunkArgs struct {
+	ChunkId ChunkId
+}
+type EnsureChunkReply struct{}
+
 type GrantLeaseArgs struct {
 	ChunkId     ChunkId
 	Replication []ChunkServer // Non-primary servers replicating this chunk

@@ -39,7 +39,7 @@ func (chunk *Chunk) ensureLease(masterService *MasterService) (utils.ChunkServer
 		if len(replication) == 0 {
 			return 0, errors.New("no servers replicating the chunk")
 		}
-		primaryServerId := masterService.chooseLeastLeased(replication)
+		primaryServerId := masterService.ChunkLocationData.chooseLeastLeased(replication)
 		chunk.Lease.Primary = primaryServerId
 		primaryChunkServerMetadata, exists := masterService.ChunkLocationData.chunkServers.Load(primaryServerId)
 		primaryChunkServer := primaryChunkServerMetadata.(*ChunkServerMetadata).ChunkServer
@@ -79,7 +79,7 @@ func (chunk *Chunk) ensureInitialized(masterService *MasterService) (servers []u
 		chunk.Initialized = true
 		replicationGoal := masterService.Settings.DefaultReplicationGoal
 		chunk.ReplicationGoal = replicationGoal
-		servers = masterService.getChunkServersForNewChunk(replicationGoal)
+		servers = masterService.ChunkLocationData.getChunkServersForNewChunk(replicationGoal)
 
 		// Indicate that they replicate the selected chunks
 		masterService.ChunkLocationData.ChunkReplication.mutex.Lock()

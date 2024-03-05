@@ -11,29 +11,6 @@ import (
 	"time"
 )
 
-func (masterService *MasterService) chooseLeastLeased(servers []utils.ChunkServerId) (leastLeasedServer utils.ChunkServerId) {
-	leastLeasedCount := uint64(math.MaxUint64)
-
-	for _, serverId := range servers {
-		value, exists := masterService.ChunkLocationData.chunkServers.Load(serverId)
-
-		if exists {
-			server := value.(*ChunkServerMetadata)
-			if !server.available.Load() {
-				continue
-			}
-
-			leaseCount := server.leaseCount.Load()
-			if leaseCount < leastLeasedCount {
-				leastLeasedCount = leaseCount
-				leastLeasedServer = serverId
-			}
-		}
-	}
-
-	return
-}
-
 type ChunkReplication struct {
 	Replication map[utils.ChunkId][]utils.ChunkServerId // Servers storing the chunk, including primary if any
 	mutex       sync.Mutex
@@ -55,15 +32,30 @@ type ChunkLocationData struct {
 	// TODO lease map: ChunkId => ChunkServerId + expiration
 }
 
-type MasterService struct {
-	Settings                   Settings
-	nextAvailableChunkId       atomic.Uint32
-	nextAvailableChunkServerId atomic.Uint32
-	Namespace                  *Namespace
-	ChunkLocationData          ChunkLocationData
+func (chunkLocationData *ChunkLocationData) chooseLeastLeased(servers []utils.ChunkServerId) (leastLeasedServer utils.ChunkServerId) {
+	leastLeasedCount := uint64(math.MaxUint64)
+
+	for _, serverId := range servers {
+		value, exists := chunkLocationData.chunkServers.Load(serverId)
+
+		if exists {
+			server := value.(*ChunkServerMetadata)
+			if !server.available.Load() {
+				continue
+			}
+
+			leaseCount := server.leaseCount.Load()
+			if leaseCount < leastLeasedCount {
+				leastLeasedCount = leaseCount
+				leastLeasedServer = serverId
+			}
+		}
+	}
+
+	return
 }
 
-func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (servers []utils.ChunkServerId) {
+func (chunkLocationData *ChunkLocationData) getChunkServersForNewChunk(n uint32) (servers []utils.ChunkServerId) {
 	type OccupiedServer = struct {
 		id        utils.ChunkServerId
 		occupancy int
@@ -71,7 +63,7 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 
 	leastOccupiedServers := make([]OccupiedServer, 0, n) // No need to use a heap as n is small
 
-	masterService.ChunkLocationData.chunkServers.Range(func(key any, value any) bool {
+	chunkLocationData.chunkServers.Range(func(key any, value any) bool {
 		id := key.(utils.ChunkServerId)
 
 		server := value.(*ChunkServerMetadata)
@@ -101,6 +93,14 @@ func (masterService *MasterService) getChunkServersForNewChunk(n uint32) (server
 	}
 
 	return
+}
+
+type MasterService struct {
+	Settings                   Settings
+	nextAvailableChunkId       atomic.Uint32
+	nextAvailableChunkServerId atomic.Uint32
+	Namespace                  *Namespace
+	ChunkLocationData          ChunkLocationData
 }
 
 func (masterService *MasterService) changeChunkReplication(chunkServerId utils.ChunkServerId, added []utils.ChunkId, removed []utils.ChunkId) {

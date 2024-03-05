@@ -112,13 +112,12 @@ func (masterService *MasterService) changeChunkReplication(chunkServerId utils.C
 		chunkReplication.Replication[chunkId] = replication
 		chunkReplication.mutex.Unlock()
 
-		// TODO if below per chunk/file replication goal
-		if len(replication) < int(masterService.Settings.DefaultReplicationGoal) {
+		if len(replication) == 0 {
+			log.Error().Msgf("chunk with id %d has no replica, it is definitely lost", chunkId)
+		} else if len(replication) < int(masterService.Settings.DefaultReplicationGoal) {
+			// TODO if below per chunk/file replication goal
 			// TODO queue for re-replication, with priorities
 			log.Error().Msgf("chunk with id %d is under replicated", chunkId)
-		}
-		if len(replication) == 0 {
-			log.Error().Msgf("chunk with id %d has no replica, it is lost", chunkId)
 		}
 	}
 

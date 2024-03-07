@@ -19,7 +19,7 @@ func (lease *Lease) grant(primary utils.ChunkServerId) {
 }
 
 func (lease *Lease) has() bool {
-	return lease.GrantTime.IsZero() && time.Now().Before(lease.GrantTime.Add(utils.LeaseDuration))
+	return !lease.GrantTime.IsZero() && time.Now().Before(lease.GrantTime.Add(utils.LeaseDuration))
 }
 
 type Chunk struct {

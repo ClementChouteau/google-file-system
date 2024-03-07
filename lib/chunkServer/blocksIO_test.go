@@ -3,7 +3,6 @@ package chunkServer
 import (
 	"github.com/stretchr/testify/assert"
 	"os"
-	"path"
 	"testing"
 )
 
@@ -13,17 +12,6 @@ func generateTestData(size int) []byte {
 		testData[i] = byte(i % 256)
 	}
 	return testData
-}
-
-func TestEnsureChunk(t *testing.T) {
-	dir, err := os.MkdirTemp("", "tmp_chunks_")
-	defer os.Remove(dir)
-	assert.NoError(t, err)
-
-	chunkPath := path.Join(dir, "chunk")
-	_, err = os.Create(chunkPath)
-	defer os.Remove(chunkPath)
-	assert.NoError(t, err)
 }
 
 func TestReadWriteChunkBlock(t *testing.T) {

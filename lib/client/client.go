@@ -133,9 +133,10 @@ func (gfsClient *GFSClient) Read(path string, offset uint64, length uint64) (dat
 		utils.Shuffle(*serverIds)
 		for _, chunkServerId := range *serverIds {
 			chunkRequest := utils.ReadArgs{
-				Id:     chunkRange.id,
-				Offset: chunkRange.Offset,
-				Length: chunkRange.Length,
+				Id:         chunkRange.id,
+				MinVersion: masterReply.MinVersions[chunkRange.id],
+				Offset:     chunkRange.Offset,
+				Length:     chunkRange.Length,
 			}
 			chunkReply := &utils.ReadReply{}
 			server := masterReply.FindServer(chunkServerId)
@@ -208,9 +209,10 @@ masterLoop:
 
 			// Commit on primary
 			chunkRequest := utils.WriteArgs{
-				Id:     chunkRange.id,
-				DataId: dataRequest.Id,
-				Offset: chunkRange.Offset,
+				Id:         chunkRange.id,
+				MinVersion: masterReply.MinVersions[chunkRange.id],
+				DataId:     dataRequest.Id,
+				Offset:     chunkRange.Offset,
 			}
 			chunkReply := &utils.WriteReply{}
 
@@ -268,8 +270,9 @@ func (gfsClient *GFSClient) RecordAppend(path string, data []byte) (err error) {
 
 		// Try to record append in this chunk
 		chunkRequest := utils.RecordAppendArgs{
-			Id:     masterReply.Id,
-			DataId: dataRequest.Id,
+			Id:         masterReply.Id,
+			MinVersion: masterReply.MinVersion,
+			DataId:     dataRequest.Id,
 		}
 		chunkReply := utils.RecordAppendReply{}
 		primaryServer := masterReply.FindServer(masterReply.PrimaryId)

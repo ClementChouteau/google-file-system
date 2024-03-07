@@ -9,11 +9,13 @@ import (
 )
 
 type Chunk struct {
-	Id          utils.ChunkId
-	Lock        sync.RWMutex
-	LeaseMutex  sync.RWMutex
-	lease       time.Time // Time point when we received the lease
-	Replication []utils.ChunkServer
+	Id            utils.ChunkId
+	Lock          sync.RWMutex
+	Version       utils.ChunkVersion
+	VersionOffset int64
+	LeaseMutex    sync.RWMutex
+	lease         time.Time // Time point when we received the lease
+	Replication   []utils.ChunkServer
 }
 
 func (chunk *Chunk) Ensure(path string) (err error) {

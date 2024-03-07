@@ -24,6 +24,7 @@ func (lease *Lease) has() bool {
 
 type Chunk struct {
 	Id              utils.ChunkId
+	Version         utils.ChunkVersion
 	Initialized     bool // Uninitialized chunks can be parts of sparse files, they have no replication
 	ReplicationGoal uint32
 	Lease           Lease
@@ -54,9 +55,12 @@ func (chunk *Chunk) ensureLease(masterService *MasterService) (utils.ChunkServer
 		}
 
 		if exists {
+			chunk.Version++
+
 			// Grant lease to this new primary
 			request := utils.GrantLeaseArgs{
 				ChunkId:     chunk.Id,
+				Version:     chunk.Version,
 				Replication: servers,
 			}
 			err := primaryChunkServer.Endpoint.Call("ChunkService.GrantLeaseRPC", request, &utils.GrantLeaseReply{})

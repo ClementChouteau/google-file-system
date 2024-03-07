@@ -42,9 +42,10 @@ type DeleteArgs struct {
 type DeleteReply struct{}
 
 type ReadArgs struct {
-	Id     ChunkId
-	Offset uint32
-	Length uint32
+	Id         ChunkId
+	MinVersion ChunkVersion
+	Offset     uint32
+	Length     uint32
 }
 type ReadReply struct {
 	Data []byte
@@ -52,11 +53,13 @@ type ReadReply struct {
 
 type EnsureChunkArgs struct {
 	ChunkId ChunkId
+	Version ChunkVersion
 }
 type EnsureChunkReply struct{}
 
 type GrantLeaseArgs struct {
 	ChunkId     ChunkId
+	Version     ChunkVersion
 	Replication []ChunkServer // Non-primary servers replicating this chunk
 }
 type GrantLeaseReply struct{}
@@ -82,15 +85,17 @@ type ApplyWriteArgs = WriteArgs
 type ApplyWriteReply = WriteReply
 
 type WriteArgs struct {
-	Id     ChunkId
-	DataId uuid.UUID
-	Offset uint32
+	Id         ChunkId
+	MinVersion ChunkVersion
+	DataId     uuid.UUID
+	Offset     uint32
 }
 type WriteReply struct{}
 
 type RecordAppendArgs struct {
-	Id     ChunkId
-	DataId uuid.UUID
+	Id         ChunkId
+	MinVersion ChunkVersion
+	DataId     uuid.UUID
 }
 type RecordAppendReply struct {
 	Done bool   // Not enough space in the current chunk
@@ -128,6 +133,7 @@ func (serversLocation *ServersLocation) FindReplication(id ChunkId) *[]ChunkServ
 
 type ChunksAndServersLocation struct {
 	Chunks         []ChunkId // Chunks of the file in order
+	MinVersions    map[ChunkId]ChunkVersion
 	PrimaryServers map[ChunkId]ChunkServerId
 	ServersLocation
 }
@@ -143,9 +149,10 @@ type RecordAppendChunksArgs struct {
 	Nr   int // Give at least the Nr chunk of the file or the last chunk of the file
 }
 type RecordAppendChunksReply struct {
-	Nr        int
-	Id        ChunkId
-	PrimaryId ChunkServerId
+	Nr         int
+	Id         ChunkId
+	PrimaryId  ChunkServerId
+	MinVersion ChunkVersion
 	ServersLocation
 }
 

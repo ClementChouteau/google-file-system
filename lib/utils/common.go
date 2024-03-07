@@ -21,6 +21,8 @@ type ChunkId = uint32
 
 type ChunkServerId = uint32
 
+type ChunkVersion = uint32 // This should be enough if version is per lease
+
 type Endpoint struct {
 	Host string
 	Port int

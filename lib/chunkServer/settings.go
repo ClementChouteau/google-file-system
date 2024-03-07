@@ -20,6 +20,10 @@ func (settings *Settings) GetChunkPath(id utils.ChunkId) string {
 	return filepath.Join(settings.GetChunksFolder(), strconv.Itoa(int(id)))
 }
 
+func (settings *Settings) GetChunkVersionsPath() string {
+	return filepath.Join(settings.Folder, "versions")
+}
+
 func (settings *Settings) GetServerIdPath() string {
 	return filepath.Join(settings.Folder, "Id")
 }

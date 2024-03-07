@@ -28,7 +28,7 @@ type ChunkServerMetadata struct {
 
 type ChunkLocationData struct {
 	ChunkReplication ChunkReplication
-	chunkServers     sync.Map // common.ChunkServerId => *ChunkServerMetadata
+	chunkServers     sync.Map // utils.ChunkServerId => *ChunkServerMetadata
 	// TODO lease map: ChunkId => ChunkServerId + expiration
 }
 
@@ -333,6 +333,7 @@ func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAp
 
 		var chunkId utils.ChunkId
 		var primaryServerId utils.ChunkServerId
+		var minVersion utils.ChunkVersion
 		servers := make([]utils.ChunkServer, 0)
 
 		nr := max(request.Nr, len(file.chunks)-1)
@@ -355,6 +356,8 @@ func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAp
 				return false
 			}
 
+			minVersion = (*chunk).Version
+
 			return false
 		})
 
@@ -373,9 +376,10 @@ func (masterService *MasterService) RecordAppendChunksRPC(request utils.RecordAp
 		masterService.ChunkLocationData.ChunkReplication.mutex.Unlock()
 
 		*reply = utils.RecordAppendChunksReply{
-			Nr:        nr,
-			Id:        chunkId,
-			PrimaryId: primaryServerId,
+			Nr:         nr,
+			Id:         chunkId,
+			PrimaryId:  primaryServerId,
+			MinVersion: minVersion,
 			ServersLocation: utils.ServersLocation{
 				Servers:     servers,
 				Replication: replication,
@@ -415,6 +419,7 @@ func (masterService *MasterService) readWriteChunks(mode int, request utils.Read
 		chunks := make([]utils.ChunkId, 0, chunksCount)
 		servers := make([]utils.ChunkServer, 0, chunksCount)
 		var primaryServers map[utils.ChunkId]utils.ChunkServerId
+		minVersions := make(map[utils.ChunkId]utils.ChunkVersion, chunksCount)
 		if mode == WRITE {
 			primaryServers = make(map[utils.ChunkId]utils.ChunkServerId, chunksCount)
 		}
@@ -447,6 +452,9 @@ func (masterService *MasterService) readWriteChunks(mode int, request utils.Read
 				}
 				primaryServers[chunk.Id] = primaryServerId
 			}
+
+			minVersions[chunk.Id] = (*chunk).Version
+
 			return true
 		})
 
@@ -468,6 +476,7 @@ func (masterService *MasterService) readWriteChunks(mode int, request utils.Read
 
 		*reply = utils.WriteChunksReply{
 			PrimaryServers: primaryServers,
+			MinVersions:    minVersions,
 			ServersLocation: utils.ServersLocation{
 				Servers:     servers,
 				Replication: replication,

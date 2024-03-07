@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"path"
 	"strconv"
 	"sync"
 	"time"
@@ -26,8 +27,9 @@ type ChunkService struct {
 	settings        Settings
 	id              utils.ChunkServerId
 	chunkOperations chan Operation
-	chunks          sync.Map // common.ChunkId => *Chunk
-	servers         sync.Map // common.ChunkServerId => common.ChunkServer
+	chunks          sync.Map // utils.ChunkId => *Chunk
+	chunkVersions   ChunkVersions
+	servers         sync.Map // utils.ChunkServerId => utils.ChunkServer
 	temporaryData   *lru.Cache[uuid.UUID, []byte]
 }
 
@@ -41,6 +43,12 @@ func (chunkService *ChunkService) ensureFolders() (err error) {
 }
 
 func (chunkService *ChunkService) readChunkMetadataFromDisk() (count int, err error) {
+	file, versions, err := readChunkVersionsFromDisk(chunkService.settings.GetChunkVersionsPath())
+	if err != nil {
+		return 0, err
+	}
+	chunkService.chunkVersions.file = file
+
 	chunksPath := chunkService.settings.GetChunksFolder()
 	entries, err := os.ReadDir(chunksPath)
 	if err != nil {
@@ -53,12 +61,28 @@ func (chunkService *ChunkService) readChunkMetadataFromDisk() (count int, err er
 			return 0, err
 		}
 
-		chunk := &Chunk{
-			Id: utils.ChunkId(id),
+		chunkId := utils.ChunkId(id)
+
+		version, exists := versions[chunkId] // No need to lock as this happens before start
+		if !exists {
+			log.Error().Msgf("no version for chunk %d", chunkId)
+			err := os.Remove(path.Join(chunksPath, file.Name()))
+			if err != nil {
+				log.Error().Err(err).Uint32("chunk", chunkId).Msg("removing chunk with no version")
+			}
+			continue
 		}
-		chunkService.chunks.Store(utils.ChunkId(id), chunk)
+
+		chunk := &Chunk{
+			Id:            chunkId,
+			Version:       version.version,
+			VersionOffset: version.offset,
+		}
+		chunkService.chunks.Store(chunkId, chunk)
 		count++
 	}
+
+	// TODO unset versions that have no corresponding chunk
 
 	return
 }
@@ -131,6 +155,8 @@ func (chunkService *ChunkService) ensureServerId() utils.ChunkServerId {
 }
 
 func (chunkService *ChunkService) sendHeartbeat() {
+	// TODO send version alongside chunks
+
 	chunks := make([]utils.ChunkId, 0)
 	chunkService.chunks.Range(func(key any, value any) bool {
 		chunks = append(chunks, value.(*Chunk).Id)
@@ -251,37 +277,73 @@ func (chunkService *ChunkService) readTemporary(id uuid.UUID) (data []byte, exis
 	return value, exists
 }
 
-// ensureChunk ensures that the chunk exists, writes it
-func (chunkService *ChunkService) ensureChunk(id utils.ChunkId, create bool) (chunk *Chunk, err error) {
-	newChunk := &Chunk{
-		Id: id,
-	}
-	value, exists := chunkService.chunks.LoadOrStore(id, newChunk)
-
-	if !create && !exists {
-		err = errors.New("no corresponding chunk")
-		log.Error().Err(err).Uint32("chunk", id)
-		return
-	}
-
+// createChunk ensures that the chunk exists, writes it
+func (chunkService *ChunkService) createChunk(id utils.ChunkId, nextVersion utils.ChunkVersion) (chunk *Chunk, err error) {
 	// Ensure that the file exists
+	newChunk := &Chunk{
+		Id:      id,
+		Version: nextVersion,
+	}
+	newChunk.Lock.Lock() // Prevent accesses to chunk before it is properly initialized
+	defer newChunk.Lock.Unlock()
+
+	value, exists := chunkService.chunks.LoadOrStore(id, newChunk)
 	chunk = value.(*Chunk)
+
 	if !exists {
-		chunk.Lock.Lock()
+		// Create chunk file on disk
 		err = chunk.Ensure(chunkService.settings.GetChunkPath(id))
-		chunk.Lock.Unlock()
 		if err != nil {
 			log.Error().Err(err).Msgf("could not create chunk %d", id)
 			return
 		}
-		log.Debug().Msgf("created chunk %d", id)
+
+		// Write chunk version
+		chunkService.chunkVersions.lock.Lock()
+		defer chunkService.chunkVersions.lock.Unlock()
+		var offset int64
+		offset, err = chunkService.chunkVersions.NextAvailableOffset()
+		if err != nil {
+			return
+		}
+
+		chunk.VersionOffset = offset
+		err = chunkService.chunkVersions.Set(id, nextVersion, offset)
+		if err != nil {
+			return
+		}
+
+		log.Debug().Msgf("created chunk %d in version %d", id, nextVersion)
+	} else {
+		chunk.Lock.Lock()
+		defer chunk.Lock.Unlock()
+
+		if chunk.Version == nextVersion {
+			return
+		}
+
+		// Increase chunk version
+		chunk.Version = nextVersion
+		chunkService.chunkVersions.lock.Lock()
+		err = chunkService.chunkVersions.Set(id, nextVersion, chunk.VersionOffset)
+		chunkService.chunkVersions.lock.Unlock()
+
+		log.Debug().Msgf("increased chunk %d version to %d", id, nextVersion)
 	}
+
 	return
 }
 
 // getChunk accesses the chunk, returns an error if it does not exist
 func (chunkService *ChunkService) getChunk(id utils.ChunkId) (chunk *Chunk, err error) {
-	return chunkService.ensureChunk(id, false)
+	value, exists := chunkService.chunks.Load(id)
+	if !exists {
+		err = errors.New("no corresponding chunk")
+		log.Error().Err(err).Uint32("chunk", id)
+		return
+	}
+	chunk = value.(*Chunk)
+	return
 }
 
 func (chunkService *ChunkService) ReadRPC(request utils.ReadArgs, reply *utils.ReadReply) error {
@@ -291,6 +353,11 @@ func (chunkService *ChunkService) ReadRPC(request utils.ReadArgs, reply *utils.R
 	}
 
 	chunk := value.(*Chunk)
+	if chunk.Version < request.MinVersion {
+		err := errors.New("trying to read an outdated chunk")
+		log.Error().Err(err).Uint32("chunk", request.Id).Send()
+		return err
+	}
 	chunk.Lock.RLock()
 	data, err := chunk.Read(chunkService.settings.GetChunkPath(request.Id), request.Offset, request.Length)
 	chunk.Lock.RUnlock()
@@ -303,17 +370,18 @@ func (chunkService *ChunkService) ReadRPC(request utils.ReadArgs, reply *utils.R
 	return nil
 }
 
-func (chunkService *ChunkService) EnsureChunkRPC(request utils.EnsureChunkArgs, _ *utils.EnsureChunkReply) error {
-	_, err := chunkService.ensureChunk(request.ChunkId, true)
-	return err
+func (chunkService *ChunkService) EnsureChunkRPC(request utils.EnsureChunkArgs, _ *utils.EnsureChunkReply) (err error) {
+	_, err = chunkService.createChunk(request.ChunkId, request.Version)
+	return
 }
 
 func (chunkService *ChunkService) GrantLeaseRPC(request utils.GrantLeaseArgs, _ *utils.GrantLeaseReply) error {
-	log.Debug().Msgf("received lease for chunk %d", request.ChunkId)
+	log.Debug().Msgf("received lease for chunk %d in version %d", request.ChunkId, request.Version)
 
 	// Create the chunk on our replicas
 	ensureChunkRequest := utils.EnsureChunkArgs{
 		ChunkId: request.ChunkId,
+		Version: request.Version,
 	}
 	for _, server := range request.Replication {
 		if server.Id == chunkService.id {
@@ -327,7 +395,7 @@ func (chunkService *ChunkService) GrantLeaseRPC(request utils.GrantLeaseArgs, _ 
 	}
 
 	// Create the chunk on primary
-	chunk, err := chunkService.ensureChunk(request.ChunkId, true)
+	chunk, err := chunkService.createChunk(request.ChunkId, request.Version)
 	if err != nil {
 		return err
 	}
@@ -377,7 +445,7 @@ func (chunkService *ChunkService) PushDataRPC(request utils.PushDataArgs, _ *uti
 		break
 	}
 
-	log.Debug().Msgf("received temporary data of length %d with id %s", len(request.Data), request.Id.String())
+	log.Debug().Str("dataId", request.Id.String()).Msgf("received temporary data of length %d", len(request.Data))
 
 	return
 }
@@ -415,6 +483,12 @@ func (chunkService *ChunkService) WriteRPC(request utils.WriteArgs, _ *utils.Wri
 		return err
 	}
 
+	if chunk.Version < request.MinVersion {
+		err := errors.New("trying to read an outdated chunk")
+		log.Error().Err(err).Uint32("chunk", request.Id).Send()
+		return err
+	}
+
 	// Check lease
 	chunk.LeaseMutex.RLock()
 	defer chunk.LeaseMutex.RUnlock()
@@ -448,6 +522,13 @@ func (chunkService *ChunkService) RecordAppendRPC(request utils.RecordAppendArgs
 		return err
 	}
 
+	if chunk.Version < request.MinVersion {
+		err := errors.New("trying to read an outdated chunk")
+		log.Error().Err(err).Uint32("chunk", request.Id).Send()
+		return err
+	}
+
+	// Check lease
 	chunk.LeaseMutex.RLock()
 	defer chunk.LeaseMutex.RUnlock()
 	if !chunk.HasLease() {
@@ -481,7 +562,7 @@ func (chunkService *ChunkService) RecordAppendRPC(request utils.RecordAppendArgs
 	}
 	chunk.Lock.Unlock()
 
-	log.Debug().Str("Appended on primary", request.DataId.String()).Send()
+	log.Debug().Str("dataId", request.DataId.String()).Msg("Appended on primary")
 
 	err = <-completion
 	if err != nil {

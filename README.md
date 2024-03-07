@@ -1,16 +1,10 @@
 # The Google File System
 
+This project aims at implementing the Google File System.
+
+It aims at a simple implementation but remain close to what is described in the paper.
+
 https://research.google/pubs/the-google-file-system/
-
-TODO implementation choices
-
-## TODO
-
-Version of chunk (saved on disk) to know chunk version
-- refuse update and chunk when version is not up-to-date
-- send versions in regular heartbeats
-
-When chunk is empty do not touch it
 
 ## Client library
 
@@ -23,9 +17,17 @@ Based on the wording from the paper it appears so.
 Two types of expiration are possible:
 1) A chunk server stops sending heartbeats, in this case it is excluded
 and its chunks are considered not replicated anymore.
-2) A chunk server reports fewer chunks than previously.
+2) A chunk server reports fewer chunks than previously (corrupted chunks).
 
 ## Chunk server
+
+The chunk server stores each chunk in a separate file with checksums at the beginning,
+this means that the data is in a contiguous part of the disk.
+We waste around 4KB of checksums at the beginning of the file,
+this should be ok as the GFS is not optimized for small files "Small files must be supported, but we need not optimize for them.".
+
+Chunk versions are stored in a separate file to speed up restart, otherwise we would need to read
+all chunk blocks before starting.
 
 > When are chunks created ?
 

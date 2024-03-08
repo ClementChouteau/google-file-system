@@ -80,26 +80,6 @@ func (rt *ResettableTimer) Reset(duration time.Duration) {
 	rt.timer.Reset(duration)
 }
 
-func LenSum[T any](slices [][]T) int {
-	size := 0
-	for _, slice := range slices {
-		size += len(slice)
-	}
-	return size
-}
-
-func ResizeSlice[T any](slice []T, newLen int) []T {
-	// Resize
-	if cap(slice) >= newLen {
-		return slice[:newLen]
-	}
-
-	// Reallocate
-	newSlice := make([]T, newLen)
-	copy(newSlice, slice)
-	return newSlice
-}
-
 func Shuffle[T any](arr []T) {
 	for i := len(arr) - 1; i > 0; i-- {
 		j := rand.Intn(i + 1)

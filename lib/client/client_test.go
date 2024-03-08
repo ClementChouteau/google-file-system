@@ -1,14 +1,16 @@
 package client
 
 import (
+	"Google_File_System/lib/chunkServer"
+	"crypto/rand"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
 func TestMkdir(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 
 	assert.Error(t, client.Mkdir(""), "Path must start with root")
 	assert.Error(t, client.Mkdir("/"), "Cannot create root directory")
@@ -19,8 +21,8 @@ func TestMkdir(t *testing.T) {
 
 func TestRmdir(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 
 	assert.Error(t, client.Rmdir(""), "Cannot remove empty path")
 	assert.Error(t, client.Rmdir("/"), "Cannot remove root directory")
@@ -37,8 +39,8 @@ func TestRmdir(t *testing.T) {
 
 func TestCreate(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 
 	assert.NoError(t, client.Create("/a"))
 	assert.Error(t, client.Create("/a"), "File already exists")
@@ -51,8 +53,8 @@ func TestCreate(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 
 	assert.NoError(t, client.Create("/x"))
 	assert.NoError(t, client.Create("/y"))
@@ -67,8 +69,8 @@ func TestDelete(t *testing.T) {
 
 func TestLs(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 
 	assert.NoError(t, client.Mkdir("/u"))
 	assert.NoError(t, client.Mkdir("/v"))
@@ -102,8 +104,8 @@ func TestLs(t *testing.T) {
 
 func TestWrite(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 	assert.NoError(t, client.Mkdir("/write"))
 	assert.NoError(t, client.Mkdir("/write/test"))
 	assert.NoError(t, client.Create("/write/test/file"))
@@ -119,10 +121,60 @@ func TestWrite(t *testing.T) {
 	assert.EqualValues(t, "Nice Job!", string(data))
 }
 
+func TestMultiBlocksWrite(t *testing.T) {
+	client, err := New("localhost", 52684)
+	assert.NoError(t, err)
+	defer client.Close()
+	assert.NoError(t, client.Create("/multiBlocks"))
+
+	length := 10 * chunkServer.BlockSize // This write will be over multiple blocks
+	expectedFinalResults := make([]byte, length)
+
+	// Writing a large region
+	randomBytes := make([]byte, length)
+	_, err = rand.Read(randomBytes)
+	assert.NoError(t, err)
+
+	assert.NoError(t, client.Write("/multiBlocks", 0, randomBytes))
+	copy(expectedFinalResults, randomBytes)
+	data, err := client.Read("/multiBlocks", 0, uint64(length))
+	assert.NoError(t, err)
+	assert.EqualValues(t, randomBytes, data)
+
+	// Writing at the start
+	length = 2*chunkServer.BlockSize + 1 // This write will be over 3 blocks
+	randomBytes = randomBytes[:length]
+	_, err = rand.Read(randomBytes)
+	assert.NoError(t, err)
+
+	assert.NoError(t, client.Write("/multiBlocks", 0, randomBytes))
+	copy(expectedFinalResults, randomBytes)
+	data, err = client.Read("/multiBlocks", 0, uint64(length))
+	assert.NoError(t, err)
+	assert.EqualValues(t, randomBytes, data)
+
+	// Writing at the middle
+	randomBytes = randomBytes[:length]
+	_, err = rand.Read(randomBytes)
+	assert.NoError(t, err)
+
+	assert.NoError(t, client.Write("/multiBlocks", 3*chunkServer.BlockSize+1, randomBytes))
+	copy(expectedFinalResults[3*chunkServer.BlockSize+1:], randomBytes)
+	data, err = client.Read("/multiBlocks", 3*chunkServer.BlockSize+1, uint64(length))
+	assert.NoError(t, err)
+	assert.EqualValues(t, len(randomBytes), len(data))
+	assert.EqualValues(t, randomBytes, data)
+
+	// Checking the whole chunk
+	data, err = client.Read("/multiBlocks", 0, uint64(len(expectedFinalResults)))
+	assert.NoError(t, err)
+	assert.EqualValues(t, expectedFinalResults, data)
+}
+
 func TestRecordAppend(t *testing.T) {
 	client, err := New("localhost", 52684)
-	defer client.Close()
 	assert.NoError(t, err)
+	defer client.Close()
 	assert.NoError(t, client.Mkdir("/record"))
 	assert.NoError(t, client.Mkdir("/record/append"))
 	assert.NoError(t, client.Create("/record/append/file"))

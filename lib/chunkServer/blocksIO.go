@@ -99,7 +99,7 @@ func WriteChunkBlocks(file *os.File, offset uint32, data []byte) (err error) {
 	// Compute new checksums
 	checksums := make([]uint32, end-start+1)
 	for i := start; i <= end; i++ {
-		checksums[i-start], err = utils.Checksum(storedData[i*BlockSize : min((i+1)*BlockSize, uint32(len(storedData)))])
+		checksums[i-start], err = utils.Checksum(storedData[(i-start)*BlockSize : min((i-start+1)*BlockSize, uint32(len(storedData)))])
 		if err != nil {
 			return
 		}

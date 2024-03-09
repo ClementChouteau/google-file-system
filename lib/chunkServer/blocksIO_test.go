@@ -2,6 +2,7 @@ package chunkServer
 
 import (
 	"github.com/stretchr/testify/assert"
+	"io"
 	"os"
 	"testing"
 )
@@ -53,4 +54,24 @@ func TestReadWriteChunkBlock(t *testing.T) {
 	readData0, err = ReadChunkBlocks(mainFile, 2, 2)
 	assert.NoError(t, err)
 	assert.EqualValues(t, len(readData0), 0, "Empty chunk block should have a chunk of size 0")
+
+	// Corrupt block 0
+	_, err = mainFile.Seek(ChunkMetadataSize+100, io.SeekStart)
+	assert.NoError(t, err)
+	_, err = mainFile.Write([]byte{0, 0, 0})
+	assert.NoError(t, err)
+
+	// Corruption is detected
+	_, err = ReadChunkBlocks(mainFile, 0, 0)
+	assert.ErrorIs(t, err, ErrCorruptedBlock)
+
+	// Corrupt block 1
+	_, err = mainFile.Seek(ChunkMetadataSize+BlockSize+100, io.SeekStart)
+	assert.NoError(t, err)
+	_, err = mainFile.Write([]byte{0, 0, 0})
+	assert.NoError(t, err)
+
+	// Corruption is detected
+	_, err = ReadChunkBlocks(mainFile, 1, 1)
+	assert.ErrorIs(t, err, ErrCorruptedBlock)
 }

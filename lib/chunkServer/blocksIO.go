@@ -10,9 +10,11 @@ import (
 
 const BlockSize = 64 * 1024
 
-const chunkChecksumsSize = (utils.ChunkSize / BlockSize) * 4
+const ChunkChecksumsSize = (utils.ChunkSize / BlockSize) * 4
 
-const chunkMetadataSize = chunkChecksumsSize
+const ChunkMetadataSize = ChunkChecksumsSize
+
+var ErrCorruptedBlock = errors.New("corrupted block") // Found an explicit corruption
 
 // ChunkSize returns the size of the data stored in the chunk
 func ChunkSize(file *os.File) (size uint32, err error) {
@@ -22,10 +24,10 @@ func ChunkSize(file *os.File) (size uint32, err error) {
 		return
 	}
 
-	if fileInfo.Size() < chunkMetadataSize {
+	if fileInfo.Size() < ChunkMetadataSize {
 		size = 0
 	} else {
-		size = uint32(fileInfo.Size() - chunkMetadataSize)
+		size = uint32(fileInfo.Size() - ChunkMetadataSize)
 	}
 
 	return
@@ -55,7 +57,7 @@ func ReadChunkBlocks(file *os.File, start uint32, end uint32) (data []byte, err 
 	}
 
 	// Read data
-	_, err = file.Seek(chunkMetadataSize+int64(start*BlockSize), io.SeekStart)
+	_, err = file.Seek(ChunkMetadataSize+int64(start*BlockSize), io.SeekStart)
 	if err != nil {
 		return
 	}
@@ -74,7 +76,7 @@ func ReadChunkBlocks(file *os.File, start uint32, end uint32) (data []byte, err 
 			return nil, err
 		}
 		if checksum != storedChecksum {
-			return nil, errors.New("corrupted block")
+			return nil, ErrCorruptedBlock
 		}
 	}
 
@@ -117,7 +119,7 @@ func WriteChunkBlocks(file *os.File, offset uint32, data []byte) (err error) {
 	}
 
 	// Write new data
-	_, err = file.Seek(int64(chunkMetadataSize+offset), io.SeekStart)
+	_, err = file.Seek(int64(ChunkMetadataSize+offset), io.SeekStart)
 	if err != nil {
 		return
 	}

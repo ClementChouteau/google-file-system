@@ -184,9 +184,7 @@ func (chunkService *ChunkService) sendHeartbeat() {
 	}
 }
 
-func (chunkService *ChunkService) heartbeatTicker(wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func (chunkService *ChunkService) heartbeatTicker() {
 	log.Info().Msg("starting to send heartbeats")
 	heartbeatTick := time.Tick(5 * time.Second)
 	chunkService.sendHeartbeat()
@@ -195,9 +193,7 @@ func (chunkService *ChunkService) heartbeatTicker(wg *sync.WaitGroup) {
 	}
 }
 
-func (chunkService *ChunkService) startServer(wg *sync.WaitGroup) error {
-	defer wg.Done()
-
+func (chunkService *ChunkService) startServer() error {
 	err := rpc.Register(chunkService)
 	if err != nil {
 		return fmt.Errorf("registering RPC chunkService: %w", err)
@@ -219,9 +215,7 @@ func (chunkService *ChunkService) startServer(wg *sync.WaitGroup) error {
 }
 
 // Thread to send writes (in order) to replicas, assuming the operation is already applied on primary
-func (chunkService *ChunkService) startOperations(wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func (chunkService *ChunkService) startOperations() {
 	for {
 		operation := <-chunkService.chunkOperations
 
@@ -245,7 +239,7 @@ func (chunkService *ChunkService) startOperations(wg *sync.WaitGroup) {
 	}
 }
 
-func (chunkService *ChunkService) Start() {
+func (chunkService *ChunkService) Start() error {
 	if err := chunkService.ensureFolders(); err != nil {
 		log.Fatal().Err(err).Msg("calling ensureFolders")
 	}
@@ -260,13 +254,20 @@ func (chunkService *ChunkService) Start() {
 	log.Logger = log.Logger.With().Uint32("chunkServer", serverId).Logger()
 	log.Info().Msg("chunk server ready")
 
-	var wg sync.WaitGroup
-	wg.Add(3)
-	go chunkService.heartbeatTicker(&wg)
-	go chunkService.startServer(&wg)
-	go chunkService.startOperations(&wg)
+	errorGroup := errgroup.Group{}
+	errorGroup.Go(func() error {
+		chunkService.heartbeatTicker()
+		return nil
+	})
+	errorGroup.Go(func() error {
+		return chunkService.startServer()
+	})
+	errorGroup.Go(func() error {
+		go chunkService.startOperations()
+		return nil
+	})
 
-	wg.Wait()
+	return errorGroup.Wait()
 }
 
 func (chunkService *ChunkService) writeTemporary(id uuid.UUID, data []byte) {

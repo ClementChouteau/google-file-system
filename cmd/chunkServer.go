@@ -52,5 +52,9 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Send()
 	}
-	chunkService.Start()
+
+	err = chunkService.Start()
+	if err != nil {
+		log.Fatal().Err(err).Send()
+	}
 }

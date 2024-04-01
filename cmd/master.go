@@ -5,9 +5,9 @@ import (
 	"Google_File_System/lib/utils"
 	"flag"
 	"github.com/rs/zerolog/log"
-	"net"
-	"net/rpc"
-	"strconv"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 var (
@@ -35,23 +35,22 @@ func main() {
 	masterService.ChunkLocationData.ChunkReplication.Replication = make(map[utils.ChunkId][]utils.ChunkServerId)
 	masterService.Namespace = master.NewNamespace()
 
-	err := rpc.Register(masterService)
+	// Create and start RPC server
+	server := utils.NewServer(masterService.Settings.Endpoint)
+
+	err := server.Register(masterService)
 	if err != nil {
-		log.Fatal().Err(err).Msg("registering RPC masterService")
+		log.Fatal().Err(err).Send()
 	}
 
-	listener, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
+	err = server.Start()
 	if err != nil {
-		log.Fatal().Err(err).Msg("starting RPC server")
+		log.Fatal().Err(err).Send()
 	}
 
-	log.Info().Msgf("master (RPC) server ready listening on :%d", *port)
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Error().Err(err).Msg("accepting connection")
-		} else {
-			go rpc.ServeConn(conn)
-		}
-	}
+	// Wait for termination signal
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	<-signals
+	server.Stop()
 }

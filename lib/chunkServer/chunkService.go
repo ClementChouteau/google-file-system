@@ -9,7 +9,6 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
-	"net"
 	"net/rpc"
 	"os"
 	"path"
@@ -193,25 +192,20 @@ func (chunkService *ChunkService) heartbeatTicker() {
 	}
 }
 
-func (chunkService *ChunkService) startServer() error {
-	err := rpc.Register(chunkService)
+func (chunkService *ChunkService) startServer() (err error) {
+	server := utils.NewServer(chunkService.settings.Endpoint)
+
+	err = server.Register(chunkService)
 	if err != nil {
-		return fmt.Errorf("registering RPC chunkService: %w", err)
+		return
 	}
 
-	listener, err := net.Listen("tcp", chunkService.settings.Address())
+	err = server.Start()
 	if err != nil {
-		return fmt.Errorf("starting RPC server: %w", err)
+		return
 	}
 
-	log.Info().Msgf("chunk (RPC) server ready listening on :%d", chunkService.settings.Port)
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			return fmt.Errorf("accepting connection: %w", err)
-		}
-		go rpc.ServeConn(conn)
-	}
+	return
 }
 
 // Thread to send writes (in order) to replicas, assuming the operation is already applied on primary

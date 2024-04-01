@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"net"
 	"net/rpc"
 	"os"
@@ -221,25 +222,26 @@ func (chunkService *ChunkService) startServer(wg *sync.WaitGroup) error {
 func (chunkService *ChunkService) startOperations(wg *sync.WaitGroup) {
 	defer wg.Done()
 
-nextOperation:
 	for {
 		operation := <-chunkService.chunkOperations
 
 		// Apply operation on all replicas
+		errGroup := new(errgroup.Group)
 		for _, server := range operation.chunk.Replication {
 			if server.Id == chunkService.id {
 				continue
 			}
 
-			writeReply := &utils.WriteReply{}
-			err := server.Endpoint.Call("ChunkService.ApplyWriteRPC", operation.request, writeReply)
-			if err != nil {
-				operation.completion <- err
-				continue nextOperation
-			}
-		}
+			endpoint := server.Endpoint
+			errGroup.Go(func() error {
+				writeReply := &utils.WriteReply{}
+				return endpoint.Call("ChunkService.ApplyWriteRPC", operation.request, writeReply)
+			})
 
-		operation.completion <- nil
+		}
+		err := errGroup.Wait()
+
+		operation.completion <- err
 	}
 }
 
